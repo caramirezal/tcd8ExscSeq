@@ -1,0 +1,56 @@
+---
+title: "Single Cell Data analysis of T CD8 Exhausted cells"
+author: "Health Data Science Unit"
+date: "3/22/2020"
+output: html_document
+---
+
+
+```{r include=FALSE}
+knitr::opts_chunk$set(
+        cache = TRUE,
+        warning = FALSE,
+        message = FALSE
+)
+
+library(tidyverse)
+library(Seurat)
+```
+
+```{r}
+motifs <- read_rds('~/sc/tcd8ExscSeq/int/3.4_regulonAUC.Rds')
+head(motifs)
+```
+
+```{r}
+maike_seu <- read_rds('~/sc/hcv_scDataIntegration/data/integrated_miller_maike_sub.rds') 
+
+maike_ann <- maike_seu@meta.data %>% 
+               mutate(barcode=rownames(maike_seu@meta.data))
+
+tsne <- read_rds('../int/tSNE_AUC_50pcs_50perpl.Rds')
+tsne.df <- as.data.frame(tsne$Y) %>%
+              mutate(barcode=rownames(tsne$Y)) 
+
+tsne.df.ann <- merge(maike_ann, tsne.df)
+tsne.df.ann %>% ggplot(aes(tsne1, tsne2, colour=predicted)) +
+                geom_point() +
+                theme_classic()
+```
+
+```{r}
+tsne.df.ann %>% ggplot(aes(tsne1, tsne2, colour=orig.ident)) +
+                geom_point() +
+                theme_classic()
+```
+
+```{r}
+tsne.df.ann %>% ggplot(aes(tsne1, tsne2, colour=log2(nCount_RNA))) +
+                geom_point() +
+                theme_classic()
+```
+
+
+```{r}
+
+```
