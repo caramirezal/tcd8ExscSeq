@@ -8,6 +8,8 @@ library(rio)
 library(dittoSeq)
 library(viridis)
 
+set.seed(333)
+
 ## Setting working directory
 path2project <- '/Users/carlosramirez/sc/tcd8ExscSeq/'
 setwd(path2project)
@@ -54,12 +56,14 @@ seurat <- RunPCA(seurat, verbose = FALSE)
 seurat <- RunUMAP(seurat, dims = 1:30)
 
 ## Corrected Hofmann data
+pdf('figures/hcv_umap_before_correction.pdf')
 dittoDimPlot(subset(seurat, 
                     nina_annotations != 'NA'), 
              "nina_annotations", size = 2.5)
 dittoDimPlot(subset(seurat, 
                     nina_annotations != 'NA'), 
              "orig.ident", size = 2.5)
+dev.off()
 
 #####################################################################
 ## Correcting by sample
@@ -95,10 +99,13 @@ seurat.integrated <- RunUMAP(seurat.integrated,
                       dims = 1:30)
 
 ## Corrected Hofmann data
+pdf('figures/hofmann_corrected.pdf')
 DimPlot(subset(seurat.integrated, 
                nina_annotations != 'NA') , 
         group.by = c('orig.ident', 
-                     'nina_annotations'))
+                     'nina_annotations'), 
+        pt.size = 2.3)
+dev.off()
 
 #####################################################################
 ## Scoring using Progenitor 
@@ -129,30 +136,50 @@ seurat.integrated <- AddModuleScore(
         nbin = 5, 
         name = 'Progenitor-like'
 )
+pdf('figures/umap_miller_prog-like_signature.pdf')
 FeaturePlot(subset(seurat.integrated, 
                    nina_annotations != 'NA'), 
             reduction = 'umap',
             features = c('Progenitor.like1'), 
             pt.size = 2.5) +
                 scale_color_viridis()
+dev.off()
 
 ## Plot nina annotations
+pdf('figures/vlnplot_miller_prog-like_signature.pdf')
+seurat.integrated@meta.data$nina_annotations <- factor(seurat.integrated@meta.data$nina_annotations,
+                                                       levels = c('mem', 'trans', 'exh'))
 dittoPlot(subset(seurat.integrated, 
                  nina_annotations != 'NA'), 
           "Progenitor.like1", 
-          group.by = "nina_annotations") +
+          group.by = "nina_annotations", 
+          plots = c("jitter", "vlnplot", "boxplot"),
+          jitter.color = "blue", jitter.size = 0.5,
+          boxplot.color = "white", boxplot.width = 0.1,
+          boxplot.fill = FALSE) +
         ggtitle('HCV-infected patients samples') +
         ylab('Miller Progenitor-like Signature Score') +
         xlab('')
+dev.off()
+
+pdf('figures/umap_corrected_nina_annotations.pdf')
 dittoDimPlot(subset(seurat.integrated, 
                     nina_annotations != 'NA'), 
              "nina_annotations", size = 2.5)
 dittoDimPlot(subset(seurat.integrated, 
                     nina_annotations != 'NA'), 
              "orig.ident", size = 2.5)
+dittoDimPlot(subset(seurat.integrated, 
+                    nina_annotations %in% c('exh', 'mem')), 
+             "nina_annotations", 
+             size = 2.5,
+             do.ellipse = TRUE, 
+             do.label = TRUE)
+dev.off()
 
 ##############################################################
-## Trying to improve clustering
+## Trying to improve clustering using DEG for dimensional
+## reduction
 
 seurat.integrated$nina_annotations %>% table()
 seurat.filtered <- subset(seurat.integrated,
@@ -165,17 +192,46 @@ dim(degs)
 
 seurat.filtered <- RunPCA(seurat.filtered, 
                             verbose = FALSE, 
-                          features = degs$gene[1:100], 
+                          features = degs$gene, 
                           npcs = 20)
 seurat.filtered <- RunUMAP(seurat.filtered, 
                              dims = 1:20)
 
+pdf('figures/improved_umap_only_degs.pdf')
 DimPlot(seurat.filtered, 
         group.by = 'nina_annotations', reduction = 'pca')
-DimPlot(seurat.filtered, 
+DimPlot(subset(seurat.filtered, nina_annotations != 'trans'), 
         group.by = 'nina_annotations', reduction = 'umap')
-FeaturePlot(seurat.filtered, 
+dittoDimPlot(subset(seurat.filtered, 
+                    nina_annotations %in% c('exh', 'mem')), 
+             "nina_annotations", 
+             size = 2.5,
+             do.ellipse = TRUE, 
+             do.label = TRUE)
+FeaturePlot(subset(seurat.filtered, 
+                   nina_annotations != 'trans'), 
             reduction = 'umap',
             features = c('Progenitor.like1'), 
-            pt.size = 2.5, ) +
+            pt.size = 3) +
         scale_color_viridis()
+dev.off()
+
+#################################################################
+## Calculating DEGs between Memory-like and Terminally exhausted
+## cells
+Idents(seurat.integrated) <- seurat.integrated$nina_annotations
+degs <- FindMarkers(
+        subset(seurat.integrated, nina_annotations != 'trans'), 
+        ident.1 = 'mem', 
+        logfc.threshold = 0, 
+        min.pct = 0
+)
+degs<- degs %>% 
+        filter(p_val_adj < 0.05) 
+dim(degs)
+head(degs)
+saveRDS(degs, 
+        'analysis/mem_vs_exh_hofmann_degs.rds',
+        compress = TRUE)
+
+
