@@ -6,6 +6,11 @@ library(dplyr)
 library(rio)
 library(VennDetail)
 library(ggrepel)
+library(ChIPseeker)
+library(TxDb.Mmusculus.UCSC.mm10.knownGene)
+library(clusterProfiler)
+library(org.Mm.eg.db)
+txdb <- TxDb.Mmusculus.UCSC.mm10.knownGene
 
 set.seed(333)
 
@@ -24,6 +29,15 @@ footprint <- filter(footprint,
 head(footprint)
 dim(footprint)
 
+#############################################################
+## Loading TF ranked by a random forest based in their 
+## transcription factor activities and var importance to 
+## predict Memory-like vs Terminally exhausted CD8 T cells
+n_tfa <- 30
+rforest <- read.table('analysis/tfa_rforest_ranked.tsv.gzip')
+tfs.top <- rforest$gene[1:n_tfa]
+tfs.top
+
 ############################################################
 ## Loading DEGs between (Progenitor) Memory-like vs 
 ## Exhausted cells
@@ -34,23 +48,19 @@ degs <- filter(degs, p_val_adj < 0.05)
 dim(degs)
 head(degs)
 
+######################################################################
+## Intersecting TFA and differential footprints
+
 tfs.intersected <- intersect(
         toupper(footprint$name),
-        toupper(rownames(degs))
+        toupper(tfs.top)
 )
 
-
-ven <- venndetail(list(ATAC = toupper(footprint$name), 
-                       RNA = toupper(rownames(degs))))
-
-pdf('figures/venn_footprinting_degs_intersection.pdf')
-plot(ven)
-dev.off()
 
 pdf('figures/footprinting_degs_intersection.pdf')
 footprint %>%
         mutate(highlight=ifelse(toupper(name) %in%
-                                        toupper(rownames(degs)),
+                                       tfs.intersected,
                                 TRUE, FALSE)
                ) %>%
         mutate(gene_label=ifelse(highlight==TRUE, 
@@ -75,59 +85,82 @@ dev.off()
 ###################################################################
 ## Matching gene expression with open chromatin regions
 
-files <- list.files('analysis/tobias/progenitor_vs_terminal/', 
-                    full.names = TRUE)
-tfbs.list <- lapply(files,
-                    function(x)
-                            read.table(x, 
-                                       header = TRUE))
+url_peaks <- 'https://static-content.springer.com/esm/art%3A10.1038%2Fs41590-019-0312-6/MediaObjects/41590_2019_312_MOESM5_ESM.xlsx'
+peaks <- import(url_peaks, which = 2)
 
-## Merging TFBS
-tfbs.df  <- do.call(rbind, tfbs.list)
-tfbs.df <- filter(tfbs.df, progenitor_bound == 1 )
-tfbs.df <- mutate(tfbs.df, tfbs=gsub('_.*', '', TFBS_name))
-tfbs.df <- mutate(tfbs.df, tfbs=toupper(tfbs))
-dim(tfbs.df)
-head(tfbs.df)
-rm(tfbs.list)
-length(unique(tfbs.df$tfbs))
+## Creating bed file
+dir.create('tmp/')
+peaks.bed <- select(peaks, 
+                    Chr, Start, End,
+                    `LCMV_R1_Stem-like`:`LCMV_R2_TerminallyExh`,
+                    `log2FC: Group LCMV_Stem-like_Tet vs LCMV_TerminallyExh_Tet`,
+                    `q-value: Group LCMV_Stem-like_Tet vs LCMV_TerminallyExh_Tet`)
+colnames(peaks.bed) <- gsub(' ', '_', colnames(peaks.bed))
+head(peaks.bed)
+peaks.bed <- filter(
+        peaks.bed, 
+        `q-value:_Group_LCMV_Stem-like_Tet_vs_LCMV_TerminallyExh_Tet` < 0.05
+)
+dim(peaks.bed)
+write.table(peaks.bed, 
+            col.names = FALSE,
+            row.names = FALSE,
+            quote = FALSE,
+            sep = '\t',
+            gzfile('tmp/peaks.bed.gz'))
 
-intersect(toupper(tfbs.df$gene_name), rownames(degs))
 
-any_promoter <- tfbs.df %>% 
-        filter(name=='any_promoter') %>% 
-        select(gene_name) %>%
-        unlist() %>%
-        unique() %>%
-        toupper()
-distal_enhancer <- tfbs.df %>% 
-        filter(name=='distal_enhancer') %>% 
-        select(gene_name) %>%
-        unlist() %>%
-        unique() %>%
-        toupper()
-any_internal <- tfbs.df %>% 
-        filter(name=='any_internal') %>% 
-        select(gene_name) %>%
-        unlist() %>%
-        unique() %>%
-        toupper()
+peak <- readPeakFile('tmp/peaks.bed.gz')
+peak
 
-tfs.intersected <- intersect(
-        toupper(tfbs.df$gene_name),
-        toupper(rownames(degs))
-) %>% sort
-tfs.intersected
+peakAnno <- annotatePeak('tmp/peaks.bed.gz', 
+                         tssRegion=c(-3000, 3000),
+                         TxDb=txdb, 
+                         annoDb="org.Mm.eg.db")
+peak.ann <- as.data.frame(peakAnno) 
+names(peak.ann)[6:11] <- names(peaks.bed)[4:9]
+dim(peak.ann)        
+head(peak.ann)
+unlink('tmp/', recursive = TRUE)
 
-ven <- venndetail(list(distal_enhancer = distal_enhancer,
-                       any_promoter = any_promoter, 
-                       any_internal = any_internal,
-                       DEGS = toupper(rownames(degs))))
-plot(ven, type = "vennpie")
-plot.new()
-plot(ven)
+## Saving annotated file
+write.table(
+        peak.ann, 
+        gzfile('data/41590_2019_312_MOESM5_ESM_miller_ref_annotated_peaks.txt.gz'),
+        sep = '\t',
+        quote = FALSE, 
+        row.names = FALSE
+)
 
-#####################################################################
+## Vulcano plot
+length(intersect(toupper(peak.ann$SYMBOL), 
+                 toupper(rownames(degs))))
+peak.ann <- mutate(peak.ann, 
+                   intersection=ifelse(toupper(SYMBOL) %in% 
+                                        toupper(rownames(degs)),
+                                'DP:DEG', 'non-shared')) %>%
+            mutate(gene_label=ifelse(intersection=='DP:DEG' &
+                                             abs(`log2FC:_Group_LCMV_Stem-like_Tet_vs_LCMV_TerminallyExh_Tet`) > 2.5,
+                                     SYMBOL, ''))
+head(peak.ann)
+ggplot(peak.ann, aes(x=`log2FC:_Group_LCMV_Stem-like_Tet_vs_LCMV_TerminallyExh_Tet`,
+                   y=-log10(`q-value:_Group_LCMV_Stem-like_Tet_vs_LCMV_TerminallyExh_Tet`),
+                   colour=intersection,
+                   label=gene_label)) +
+                geom_point() +
+                geom_point(aes(x=`log2FC:_Group_LCMV_Stem-like_Tet_vs_LCMV_TerminallyExh_Tet`,
+                           y=-log10(`q-value:_Group_LCMV_Stem-like_Tet_vs_LCMV_TerminallyExh_Tet`),
+                           colour=intersection), 
+                           data=subset(peak.ann, 
+                                       intersection=='DP:DEG')) +
+                        scale_color_manual(values = c('red', 'steelblue')) +
+                geom_text_repel(max.overlaps = 10000, 
+                                force = 6, 
+                                color='black') +
+                theme_bw() +
+                theme(panel.grid = element_blank()) +
+                xlab('Log2 FC') +
+                ylab('-Log10(p-value)') +
+                ggtitle('LCMV infected Progenitor-like vs Terminally Exhausted CD8 T cells')
+                        
 
-hofmann <- readRDS('data/maike2020/hofmann_hcv_seu.rds')
-hofmann
