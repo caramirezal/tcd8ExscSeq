@@ -59,7 +59,7 @@ himmer_seu <- SCTransform(himmer_seu,
 dir.create('analysis/')
 dir.create('analysis/scenic/')
 
-write.table(t(himmer_seu@assays$SCT@scale.data),
+write.table(t(himmer_seu@assays$SCT@scale.data)[1:300,],
             file = 'analysis/scenic/maike_scenic_input.tsv',
             sep = '\t')
 
