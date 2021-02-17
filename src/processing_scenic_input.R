@@ -6,10 +6,10 @@ if ( ! requireNamespace('Seurat', quietly = TRUE) ) {
 }
 
 ## Dependencies
-library(tidyverse)
+library(dplyr)
 library(Seurat)
 
-path2project <- '/Users/carlosramirez/sc/tcd8ExscSeq/'
+path2project <- '/media/ag-cherrmann/cramirez/tcd8ExscSeq'
 setwd(path2project)
 
 file_path <- 'data/maike2020/nina_thimme_raw_counts.csv'
@@ -59,7 +59,7 @@ himmer_seu <- SCTransform(himmer_seu,
 dir.create('analysis/')
 dir.create('analysis/scenic/')
 
-write.table(t(himmer_seu@assays$SCT@scale.data)[1:300,],
-            file = 'analysis/scenic/maike_scenic_input.tsv',
+write.table(t(himmer_seu@assays$SCT@scale.data),
+            file = '../scRNASeq_pipeline/input/maike_input_scenic_10000.tsv',
             sep = '\t')
 
