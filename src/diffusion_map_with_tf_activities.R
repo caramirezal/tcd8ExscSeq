@@ -46,13 +46,13 @@ top_n_tfs <- tfs[1:4]
 top_n_tfs
 
 ## Saving random forest result
-rforest$importance %>% 
+rforest.df <- rforest$importance %>% 
         as.data.frame() %>%
         arrange(desc(MeanDecreaseGini)) %>%
         add_rownames(var = 'gene') %>%
-        mutate(gene=gsub('\\.', '', gene)) %>%
-        saveRDS('analysis/tfa_rforest_ranked.rds', 
-                compress = TRUE)
+        mutate(gene=gsub('\\.', '', gene))
+write.table(rforest.df, 
+            gzfile('analysis/tfa_rforest_ranked.tsv.gzip'))
 
 ## Visualization
 
