@@ -1,6 +1,6 @@
 ## Evaluation of targets of TFs in Progenitors-like TEx cells
 ## identified by differential footprint
-
+        
 ## Dependencies
 library(dplyr)
 library(VennDetail)
@@ -10,6 +10,12 @@ set.seed(333)
 
 path2project <- '/Users/carlosramirez/sc/tcd8ExscSeq/'
 setwd(path2project)
+
+# function to extract TFs in column 7 from SCENIC results
+extract_targets <- function(x){
+        targets <- regmatches(x, gregexpr("'[^']*'", x))[[1]] 
+        gsub("'", '', targets)
+}
 
 ################################################################
 ## Reading peak scores
@@ -25,6 +31,8 @@ tfbs.df <- mutate(tfbs.df, tf=gsub('_.*', '', TFBS_name))
 dim(tfbs.df)
 head(tfbs.df)
 rm(tfbs.list)
+
+unique(tfbs.df$tf) %>% length()
 
 ###############################################################
 ## Loading Footprint
@@ -76,11 +84,7 @@ head(FP.selected)
 ## There are allmost 20,000 
 
 ## ii) From TFA SCENIC select TFs with targets in DEGs
-# function to extract TFs in column 7 from SCENIC results
-extract_targets <- function(x){
-        targets <- regmatches(x, gregexpr("'[^']*'", x))[[1]] 
-        gsub("'", '', targets)
-}
+
 ## Extracting targets having as targets at least one of the 
 ## genes in the progenitor signature
 df <- data.frame()
@@ -120,11 +124,11 @@ df.filtered <- filter(df.scenic, interaction %in% inter.filtered)
 dim(df.filtered)
 df.filtered
 
-write.table(df.filtered,
-            file = 'analysis/filtered_interactions_scenic_dif_peaks.tsv',
-            sep = '\t',
-            quote = FALSE,
-            row.names = FALSE)
+#write.table(df.filtered,
+#            file = 'analysis/filtered_interactions_scenic_dif_peaks.tsv',
+#            sep = '\t',
+#            quote = FALSE,
+#            row.names = FALSE)
 
 ######################################################################
 
@@ -163,6 +167,21 @@ tfs.ranked <- mutate(tfs.ranked,
 tfs.highlight <- subset(tfs.ranked, highlight==TRUE)
 
 pdf('figures/tf_percentage_of_target_degs.pdf')
+tfs.ranked %>%
+        select(rank, percentage_degs) %>%
+        ggplot(aes(x=rank, 
+                   y=percentage_degs)) +
+        geom_bar(position="stack", 
+                 stat="identity",
+                 fill='steelblue') +
+        geom_smooth() +
+        theme_bw() +
+        theme(axis.text.x = element_blank(),
+              axis.ticks.x = element_blank(),
+              panel.grid = element_blank()) +
+        xlab('Rank (Footprint score)') +
+        ylab('% DEGs in targets')
+
 ggplot(tfs.ranked, aes(x=rank2, 
                    y=percentage_degs,
                    label=tf_name)) +
@@ -178,18 +197,6 @@ ggplot(tfs.ranked, aes(x=rank2,
                 theme_bw() +
                 theme(panel.grid = element_blank())
 
-tfs.ranked %>%
-        select(rank, percentage_degs) %>%
-        ggplot(aes(x=rank, 
-                   y=percentage_degs)) +
-                geom_bar(position="stack", 
-                         stat="identity",
-                         fill='steelblue') +
-                theme_bw() +
-                theme(axis.text.x = element_blank(),
-                      axis.ticks.x = element_blank(),
-                      panel.grid = element_blank()) +
-                xlab('Rank (Footprint score)') +
-                ylab('% DEGs in targets')
+
 
 dev.off()
