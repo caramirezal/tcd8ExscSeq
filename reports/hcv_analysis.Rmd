@@ -1,0 +1,397 @@
+---
+title: "Gene regulation in CD8 T cells from chronic HCV patients"
+author: "Health Data Unit"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    code_folding: hide
+  pdf_document: default
+---
+
+
+# Intro
+
+This report contain documentation of the analysis of CD8 T cells from chronic HCV
+patients.
+
+
+```{r setup, include=FALSE}
+## Dependencies
+library(ggplot2)
+library(tidyverse)
+library(dplyr)
+library(Nebulosa)
+library(rmarkdown)
+library(igraph)
+library(rio)
+library(Seurat)
+library(readxl)
+library(dittoSeq)
+library(viridis)
+library(reshape2)
+library(pander)
+
+set.seed(333)
+
+knitr::opts_chunk$set(
+        warning = FALSE, 
+        message = FALSE,
+        cache = FALSE,
+        fig.align='center'
+)
+
+## Setting paths
+path2project <- '/media/ag-cherrmann/cramirez/tcd8ExscSeq/'
+knitr::opts_knit$set(
+        root.dir = path2project
+)
+
+## Interesting genes
+genes.sel <- c('EZH2', 'Id3', 'Id2', 'KDM6A', 'PRDM1', 'Tcf7')
+genes.sel <- toupper(genes.sel) 
+```
+
+
+## Visualization of TFs
+
+
+
+ * Checking if genes are present in the count matrix.
+
+```{r, checking_count_matrix}
+## Maike Hoffman data preprocessing
+## gene names must be standardized
+himmer <- read.csv('data/maike2020/nina_thimme_raw_counts.csv', 
+                   header = TRUE)
+r_names <- himmer$X
+himmer <- dplyr::select(himmer, -X)
+himmer_mtx <- apply(himmer, 2, as.numeric)
+rownames(himmer_mtx) <- gsub('__chr.*', '', r_names) 
+
+sapply(genes.sel, function(x) x %in% toupper(rownames(himmer_mtx)))
+```
+
+Genes are present in the initial matrix but lost in a further step.
+
+ * Then, normalized gene expression of the markers in the initial uncorrected matrix were projected
+ onto the corrected UMAPs as shown in the next plots.
+ 
+ 
+ ### Normalized expression
+
+```{r, fig.width=12, fig.height=11}
+seurat <- readRDS('data/maike2020/hofmann_hcv_seu.rds')
+seurat <- subset(seurat, nina_annotations %in% c('mem', 'exh'))
+#seurat <- UpdateSeuratObject(seurat)
+cell_types <- DimPlot(seurat, 
+                      group.by = 'nina_annotations', 
+                      pt.size = 2.5, 
+                      combine = FALSE)
+
+
+## Creating an additional seurat object to store RNA
+## uncorrected data
+seurat.rna <- CreateSeuratObject(
+  counts = seurat@assays$RNA@counts,
+  project = 'HBV_RNA', 
+  assay = 'RNA', 
+  min.cells = 0, 
+  min.features = 0,
+  meta.data = seurat@meta.data
+)
+
+## Checking cells are the same and in the same order
+#any(colnames(seurat) != colnames(seurat.rna))
+#[1] FALSE       ## They are!
+
+## Normalization of the non-integrated data
+seurat.rna <- ScaleData(seurat.rna) %>% NormalizeData()
+## Extraction of the markers
+markers.rna <- FetchData(seurat.rna, vars = genes.sel) 
+colnames(markers.rna) <- paste0('rna_', colnames(markers.rna))
+
+## Adding markers to the corrected UMAP representation
+seurat@meta.data <- cbind(seurat@meta.data, markers.rna)
+markers <- FeaturePlot(seurat, 
+             features = paste0('rna_', genes.sel),
+             pt.size = 2.5, 
+             combine = FALSE)
+for (i in 1:length(markers)) {
+        markers[i][[1]] <- markers[i][[1]] +
+                                theme_void() +
+                              scale_color_viridis()
+}
+markers.list <- c(cell_types, markers)
+
+gridExtra::grid.arrange(
+        grobs=markers.list,
+        ncol=3
+)
+```
+
+
+### UTX gene expression
+
+
+```{r, utx_violin_plot, fig.align='center', fig.width=10}
+utx.vln <- dittoPlot(subset(seurat, rna_KDM6A > 0), "rna_KDM6A", 
+          group.by = "nina_annotations",
+    plots = c("vlnplot", "jitter", "boxplot"),
+    jitter.color = "blue", jitter.size = 0.5,
+    boxplot.color = "white", boxplot.width = 0.1,
+    boxplot.fill = FALSE,
+    vlnplot.scaling = "count"
+    ) + 
+  labs(x='', y='UTX Normalized gene expression') +
+  theme(legend.position = 'none',
+        axis.text.x = element_text(size = 16)) +
+  scale_fill_manual(values=c('salmon', 'cyan3'))
+
+utx.dotplot <- DotPlot(seurat, 
+                       features = 'rna_KDM6A',
+                       group.by = 'nina_annotations',
+                       dot.scale = 15) +
+              scale_color_viridis() +
+              labs(x='', y='')
+
+gridExtra::grid.arrange(
+  grobs=list(utx.vln, utx.dotplot), ncol=2
+)
+
+```
+
+
+
+## GRN inferred using GRANET
+
+GRANET is TFA inference framework based in the following steps: i) Inference of 
+co-expressed genes to TFs using GRNBoost2 which defines modules, ii) Pruning the
+modules using ATACSeq data.
+
+The next graph shows the interactions containing the genes EZH2, ID3, ID2, KDM6A,
+PRDM1, TCF7 (of which only ID2 and PRDM1) were found to be in the network
+inferred using GRANET.
+
+
+
+```{r}
+network <- read.table('analysis/scenic_atac_specific_filtered_network.tsv',
+                  header = TRUE)
+#head(network)
+
+network <- filter(network, TF %in% genes.sel | target %in% genes.sel)
+
+## Definition of the nodes list
+edges <- dplyr::select(network, TF, target)
+
+## Definition of the edges list
+nodes <- data.frame(node=unique(c(network$TF, network$target)))
+#head(nodes)
+
+#net.network <- network(edges, 
+#                       vertex.attr = nodes)
+
+net.igraph <- graph_from_data_frame(
+        d = edges,
+        vertices = nodes, 
+        directed = FALSE
+)
+
+plot(net.igraph, 
+     vertex.size=0.02, 
+     layout=layout_nicely)
+```
+
+
+```{r, eval=FALSE}
+tfa <- read.csv('analysis/scenic/hgv_3000/aucell.csv')
+colnames(tfa) %>% sort
+colnames(tfa) <- gsub('\\.', '', colnames(tfa))
+
+## function to extract TFs in column 7 from SCENIC results
+extract_targets <- function(x){
+        targets <- regmatches(x, gregexpr("'[^']*'", x))[[1]] 
+        gsub("'", '', targets)
+}
+
+#'LAG3' %in% rownames(seurat)
+#sapply(genes.sel, function(x) x %in% rownames(seurat))
+
+
+
+regulons <- read.csv('analysis/scenic/hgv_3000//reg.csv', skip = 2)
+#head(regulons)
+
+regulons.list <- lapply(1:nrow(regulons), 
+       function(i){
+               extract_targets(regulons$X.7[i])
+})
+names(regulons.list) <- regulons$TF
+
+regulons.df.list <- lapply(1:length(regulons.list), 
+                      function(i) {
+                              df <- data.frame(
+                                      target=regulons.list[i][[1]]
+                              )
+                              df$'tf' <- names(regulons.list)[i]
+                              df[, c('tf', 'target')]
+                      }) 
+
+regulons.df <- do.call(rbind, regulons.df.list)
+
+network <- filter(regulons.df, target %in% genes.sel)
+network <- unique(network)
+network %>%
+        paged_table()
+```
+
+## Scoring the CD8 T cells from chronically infected HBV patients 
+
+
+Then, we evaluated the presence of UTX related signatures as reported in [Mitchell J E et al, 2021](https://pubmed.ncbi.nlm.nih.gov/33852868/). The following UMAP projection show the CD8 T cell 
+types and the densities for the upregulated, downregulated and all genes (union of upregulated and
+downregulated) in the UTX signature.
+
+NOTE: Gene names overlap between signatures and names in the seurat object were checked. See, the
+following chunk for details.
+
+
+## Signature scores (Densities)
+
+```{r, fig.width=10}
+## Scoring CD8 T cells with UTX signatures
+if ( ! file.exists('data/1-s2.0-S2211124721002801-mmc2.xlsx')) {
+  download.file('https://ars.els-cdn.com/content/image/1-s2.0-S2211124721002801-mmc2.xlsx',
+              destfile = 'data/1-s2.0-S2211124721002801-mmc2.xlsx')
+}
+utx.sign.down <- read_xlsx('data/1-s2.0-S2211124721002801-mmc2.xlsx', 
+                      sheet = 3, skip = 3) %>%
+                    unlist() %>%
+                       unname() %>% toupper()
+utx.sign.up <- read_xlsx('data/1-s2.0-S2211124721002801-mmc2.xlsx', 
+                      sheet = 4, skip = 3) %>%
+                    unlist() %>%
+                       unname() %>% toupper()
+utx.sign <- read_xlsx('data/1-s2.0-S2211124721002801-mmc2.xlsx', 
+                      sheet = 1, skip = 3)
+utx.sign <- dplyr::select(utx.sign, Genes) %>%
+                    unlist() %>%
+                       unname() %>% toupper()
+sign.list <- list(utx.sign.up=utx.sign.up, 
+                  utx.sign.down=utx.sign.down,
+                  utx.sign=utx.sign)
+
+## Checking if mouse and human gene names match
+#lapply(sign.list, function(x) length(intersect(x, rownames(seurat.rna))))
+#$utx.sign.up
+#[1] 202
+#
+#$utx.sign.down
+#[1] 317
+#
+#$utx.sign
+#[1] 12048
+
+## Scoring cells with signatures
+seurat.rna <- AddModuleScore(seurat.rna, 
+                         features = sign.list, 
+                         name = paste0(names(sign.list), '_'))
+scores <- dplyr::select(seurat.rna@meta.data, `utx.sign.up_1`:`utx.sign_3`)
+colnames(scores) <- c('UTX_sign_up', 'UTX_sign_down', 'UTX_signature_all')
+
+## Adding scores to metatadata in the integrated UMAP
+## checking cells are the same and in the same order
+#any(colnames(seurat) != rownames(scores))
+# [1] FALSE.  ## they are
+seurat@meta.data <- cbind(seurat@meta.data, scores)
+
+signatures <- plot_density(seurat, 
+             features = colnames(scores),
+             size = 2.5, 
+             combine = FALSE)
+for (i in 1:length(signatures)) {
+        signatures[i][[1]] <- signatures[i][[1]] +
+                                theme_void() 
+}
+signatures.list <- c(cell_types, signatures)
+
+gridExtra::grid.arrange(
+        grobs=signatures.list,
+        ncol=2
+)
+```
+
+## UTX scores
+
+
+```{r, fig.width=10, fig.align='center'}
+signatures <- FeaturePlot(seurat, 
+             features = colnames(scores),
+             pt.size = 2.5, 
+             combine = FALSE)
+for (i in 1:length(signatures)) {
+        signatures[i][[1]] <- signatures[i][[1]] +
+                                theme_void() + scale_color_viridis()
+}
+signatures.list <- c(cell_types, signatures)
+
+gridExtra::grid.arrange(
+        grobs=signatures.list,
+        ncol=2
+)
+```
+
+
+As can be observed, there is a mutually exclusive expression of the up and down-regulated gene
+signatures. Interestingly, down-regulated genes in the UTX mutant have higher scores in the 
+memory progenitor, suggesting that in the WT UTX is acting as an activator of many genes in 
+this cluster.
+
+From looking also UTX gene expression we can conclude that this factor could be expressed and
+active in memory cells cluster.
+
+```{r, violin_plot, fig.align='center'}
+up.plot <- dittoPlot(seurat, "UTX_sign_up", 
+          group.by = "nina_annotations",
+    plots = c("vlnplot", "jitter", "boxplot"),
+    jitter.color = "blue", jitter.size = 0.5,
+    boxplot.color = "white", boxplot.width = 0.1,
+    boxplot.fill = FALSE,
+    vlnplot.scaling = "count"
+    ) + 
+  labs(x='', y='UTX Signature Score (Upregulated genes)') +
+  ggtitle('Upregulated genes') +
+  theme(legend.position = 'none',
+        axis.text.x = element_text(size = 16)) +
+  scale_fill_manual(values=c('salmon', 'cyan3'))
+
+down.plot <- dittoPlot(seurat, "UTX_sign_down", 
+          group.by = "nina_annotations",
+    plots = c("vlnplot", "jitter", "boxplot"),
+    jitter.color = "blue", jitter.size = 0.5,
+    boxplot.color = "white", boxplot.width = 0.1,
+    boxplot.fill = FALSE,
+    vlnplot.scaling = "count"
+    ) + 
+  labs(x='', y='UTX Signature Score (Downregulated genes)') +
+  ggtitle('Downregulated genes') +
+  theme(legend.position = 'none',
+        axis.text.x = element_text(size = 16)) +
+  scale_fill_manual(values=c('salmon', 'cyan3'))
+
+gridExtra::grid.arrange(
+  grobs=list(up.plot, down.plot), ncol=2
+)
+```
+
+From the violin plots it can be seen that the UTX signature score for upregulated genes is 
+higher in memory clusters.
+
+```{r}
+DotPlot(seurat, 
+        features = c("UTX_sign_up", "UTX_sign_down"),
+        group.by = 'nina_annotations', dot.scale = 20) +
+        scale_color_viridis(option = 'viridis') +
+        labs(x='', y='')
+```
+
