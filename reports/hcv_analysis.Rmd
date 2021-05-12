@@ -30,6 +30,9 @@ library(dittoSeq)
 library(viridis)
 library(reshape2)
 library(pander)
+library(ggpubr)
+library(GENIE3)
+library(ggrepel)
 
 set.seed(333)
 
@@ -68,7 +71,7 @@ himmer <- dplyr::select(himmer, -X)
 himmer_mtx <- apply(himmer, 2, as.numeric)
 rownames(himmer_mtx) <- gsub('__chr.*', '', r_names) 
 
-sapply(genes.sel, function(x) x %in% toupper(rownames(himmer_mtx)))
+#sapply(genes.sel, function(x) x %in% toupper(rownames(himmer_mtx)))
 ```
 
 Genes are present in the initial matrix but lost in a further step.
@@ -81,7 +84,7 @@ Genes are present in the initial matrix but lost in a further step.
 
 ```{r, fig.width=12, fig.height=11}
 seurat <- readRDS('data/maike2020/hofmann_hcv_seu.rds')
-seurat <- subset(seurat, nina_annotations %in% c('mem', 'exh'))
+seurat <- subset(seurat, nina_annotations %in% c('mem', 'exh', 'trans'))
 #seurat <- UpdateSeuratObject(seurat)
 cell_types <- DimPlot(seurat, 
                       group.by = 'nina_annotations', 
@@ -145,7 +148,7 @@ utx.vln <- dittoPlot(subset(seurat, rna_KDM6A > 0), "rna_KDM6A",
   labs(x='', y='UTX Normalized gene expression') +
   theme(legend.position = 'none',
         axis.text.x = element_text(size = 16)) +
-  scale_fill_manual(values=c('salmon', 'cyan3'))
+  scale_fill_manual(values=c('salmon', 'orange', 'cyan3'))
 
 utx.dotplot <- DotPlot(seurat, 
                        features = 'rna_KDM6A',
@@ -363,7 +366,7 @@ up.plot <- dittoPlot(seurat, "UTX_sign_up",
   ggtitle('Upregulated genes') +
   theme(legend.position = 'none',
         axis.text.x = element_text(size = 16)) +
-  scale_fill_manual(values=c('salmon', 'cyan3'))
+  scale_fill_manual(values=c('salmon', 'orange', 'cyan3'))
 
 down.plot <- dittoPlot(seurat, "UTX_sign_down", 
           group.by = "nina_annotations",
@@ -377,7 +380,7 @@ down.plot <- dittoPlot(seurat, "UTX_sign_down",
   ggtitle('Downregulated genes') +
   theme(legend.position = 'none',
         axis.text.x = element_text(size = 16)) +
-  scale_fill_manual(values=c('salmon', 'cyan3'))
+  scale_fill_manual(values=c('salmon', 'orange', 'cyan3'))
 
 gridExtra::grid.arrange(
   grobs=list(up.plot, down.plot), ncol=2
@@ -395,3 +398,108 @@ DotPlot(seurat,
         labs(x='', y='')
 ```
 
+
+## UTX signature vs UTX gene expression correlation
+
+
+The following scatter plots show the correlation of gene expression *vs* signatures (up/down) 
+scores for UTX assessing memory and exhausted populations, separately. 
+
+
+```{r, fig.height=12, fig.width=8}
+## Extracting signatures and UTX gene expression
+utx.sign.df <-  FetchData(seurat, 
+                          vars = c('nina_annotations',
+                                   'UTX_sign_up',
+                                   'UTX_sign_down',
+                                   'rna_KDM6A')) 
+
+down.plot <- utx.sign.df  %>%
+  rename(KDM6A=rna_KDM6A) %>%
+  filter(KDM6A > 0) %>%
+ggscatter(
+  x = "KDM6A", 
+  y = "UTX_sign_down",
+  color = "nina_annotations", 
+  palette = "jco",
+  add = "reg.line", 
+  ) +
+  facet_wrap(~nina_annotations) +
+  stat_cor(label.y = 0.04) +
+  stat_regline_equation(label.y = 0.02) +
+  scale_color_manual(values=c('salmon', 'orange', 'cyan3'))
+
+up.plot <- utx.sign.df  %>%
+  rename(KDM6A=rna_KDM6A) %>%
+  filter(KDM6A > 0) %>%
+ggscatter(
+  x = "KDM6A", 
+  y = "UTX_sign_up",
+  color = "nina_annotations", 
+  palette = "jco",
+  add = "reg.line"
+  ) +
+  facet_wrap(~nina_annotations) +
+  stat_cor(label.y = 0.08) +
+  stat_regline_equation(label.y = 0.06) +
+  scale_color_manual(values=c('salmon', 'orange', 'cyan3'))
+
+gridExtra::grid.arrange(
+  down.plot,
+  up.plot, 
+  ncol=1
+)
+```
+
+## Co-regulation of UTX
+
+We explored the differential regulation of UTX in memory and exhausted cells.
+
+```{r, genie3}
+## Extracting mem and exh counts matrices
+seu.list <- SplitObject(seurat.rna, split.by = 'nina_annotations')
+mtx.list <- lapply(seu.list, function(x) x@assays$RNA@scale.data)
+#lapply(mtx.list, function(x) x[1:5, 1:5])
+
+## Running GENIE3
+genie3.list <- lapply(mtx.list, 
+                      function(x) 
+                        GENIE3(exprMatrix = x, 
+                               regulators = genes.sel, 
+                               nCores = 20, nTrees = 1000))
+link.list <- lapply(genie3.list, 
+                    function(x) 
+                      getLinkList(x))
+utx.list <- lapply(link.list, 
+                    function(x) 
+                      filter(x, regulatoryGene == 'KDM6A') %>%
+                       arrange(desc(weight)) %>%
+                       mutate(rank=1:n()))
+lapply(utx.list, head)
+genie3.df <- merge(x = utx.list$mem, 
+                   y = utx.list$exh, 
+                   by = 'targetGene')
+
+x.th <- 0.3
+y.th <- 0.25
+genie3.df %>%
+  mutate(highlight=ifelse(weight.x > 0.65 | 
+                            weight.y > 0.8625, TRUE, FALSE)) %>%
+  mutate(gene_label=ifelse(highlight == TRUE, 
+                           as.character(targetGene), '')) %>%
+  ggplot(aes(x=weight.x, y=weight.y,
+             colour=highlight,
+             label=gene_label)) +
+        geom_point() +
+        geom_text_repel(max.overlaps = 300, force = 3) +
+        scale_color_manual(values = c('black', 'red')) +
+        theme_classic() +
+        theme(legend.position = 'none') +
+        labs(x='UTX link weights - Memory',
+             y='UTX link weights - Exhausted') +
+        xlim(-0.2, 1.2) +
+        ylim(-0.2, 1.2)
+        
+## Plotting
+
+```
