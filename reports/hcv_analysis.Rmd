@@ -165,19 +165,21 @@ gridExtra::grid.arrange(
 
 
 
+
+
+
+
+```{r, eval=FALSE}
 ## GRN inferred using GRANET
 
-GRANET is TFA inference framework based in the following steps: i) Inference of 
-co-expressed genes to TFs using GRNBoost2 which defines modules, ii) Pruning the
-modules using ATACSeq data.
+#GRANET is TFA inference framework based in the following steps: i) Inference of 
+#co-expressed genes to TFs using GRNBoost2 which defines modules, ii) Pruning the
+#modules using ATACSeq data.
 
-The next graph shows the interactions containing the genes EZH2, ID3, ID2, KDM6A,
-PRDM1, TCF7 (of which only ID2 and PRDM1) were found to be in the network
-inferred using GRANET.
+#The next graph shows the interactions containing the genes EZH2, ID3, ID2, KDM6A,
+#PRDM1, TCF7 (of which only ID2 and PRDM1) were found to be in the network
+#inferred using GRANET.
 
-
-
-```{r}
 network <- read.table('analysis/scenic_atac_specific_filtered_network.tsv',
                   header = TRUE)
 #head(network)
@@ -247,6 +249,7 @@ network <- unique(network)
 network %>%
         paged_table()
 ```
+
 
 ## Scoring the CD8 T cells from chronically infected HBV patients 
 
@@ -455,6 +458,7 @@ gridExtra::grid.arrange(
 
 We explored the differential regulation of UTX in memory and exhausted cells.
 
+
 ```{r, genie3}
 ## Extracting mem and exh counts matrices
 seu.list <- SplitObject(seurat.rna, split.by = 'nina_annotations')
@@ -503,3 +507,203 @@ genie3.df %>%
 ## Plotting
 
 ```
+
+## Loading Miller data
+
+AG-specific CD8 T cells were pre-processed from [Miller B et al, 2019](https://www.nature.com/articles/s41590-019-0312-6). The pre-processing is documented
+in the `src/seurat.R` file.
+
+The next UMAP shows the clusters in the Miller B et al, 2019 dataset. 
+
+
+```{r, loading_miller}
+miller <- readRDS('analysis/miller_seu.rds')
+miller.clusters <- DimPlot(miller, 
+        group.by = 'cell_type', 
+        label = TRUE) + 
+        NoLegend()
+miller.clusters
+```
+
+
+
+```{r, fig.width=9}
+## checking genes names in the list and in miller intersect
+#lapply(sign.list, length)
+#lapply(sign.list, function(x) length(intersect(x, rownames(miller))))
+
+miller <- AddModuleScore(miller, 
+                             features = sign.list, 
+                             name = paste0(names(sign.list), '_'))
+## Scoring cells with signatures
+seurat.rna <- AddModuleScore(seurat.rna, 
+                         features = sign.list, 
+                         name = paste0(names(sign.list), '_'))
+
+## Plotting scores
+scores <- dplyr::select(miller@meta.data, `utx.sign.up_1`:`utx.sign.down_2`)
+colnames(scores) <- c('UTX_sign_up', 'UTX_sign_down')
+miller@meta.data <- cbind(miller@meta.data, scores)
+
+signatures <- FeaturePlot(miller, 
+             features = colnames(scores),
+             combine = FALSE)
+for (i in 1:length(signatures)) {
+        signatures[i][[1]] <- signatures[i][[1]] +
+                                theme_void() +
+                                scale_color_viridis()
+}
+
+
+gridExtra::grid.arrange(
+        grobs=signatures,
+        ncol=2
+)
+```
+
+```{r}
+miller.up.plot <- dittoPlot(subset(miller, 
+                                     cell_type %in% c('Progenitor Ex', 'Terminally Ex')), 
+          "UTX_sign_up", 
+          group.by = "cell_type",
+    plots = c("jitter", "vlnplot", "boxplot"),
+    jitter.color = "blue", jitter.size = 0.5,
+    boxplot.color = "white", boxplot.width = 0.1,
+    boxplot.fill = FALSE,
+    vlnplot.scaling = "count"
+    ) + 
+  labs(x='', y='UTX Signature Score (Upregulated genes)') +
+  ggtitle('Upregulated genes') +
+  theme(legend.position = 'none',
+        axis.text.x = element_text(size = 16)) 
+
+miller.down.plot <- dittoPlot(subset(miller, 
+                                     cell_type %in% c('Progenitor Ex', 'Terminally Ex')), 
+          "UTX_sign_down", 
+          group.by = "cell_type",
+    plots = c("jitter", "vlnplot", "boxplot"),
+    jitter.color = "blue", jitter.size = 0.5,
+    boxplot.color = "white", boxplot.width = 0.1,
+    boxplot.fill = FALSE,
+    vlnplot.scaling = "count"
+    ) + 
+  labs(x='', y='UTX Signature Score (Downregulated genes)') +
+  ggtitle('Downregulated genes') +
+  theme(legend.position = 'none',
+        axis.text.x = element_text(size = 16)) 
+
+gridExtra::grid.arrange(
+  grobs = list(miller.up.plot, miller.down.plot),
+  ncol=2
+)
+```
+
+
+```{r, markers_expression_miller}
+miller.markers <- FeaturePlot(miller, 
+             features = genes.sel,
+             pt.size = 0.6, 
+             combine = FALSE)
+for (i in 1:length(miller.markers)) {
+        miller.markers[i][[1]] <- miller.markers[i][[1]] +
+                                theme_void() +
+                              scale_color_viridis()
+}
+
+gridExtra::grid.arrange(
+        grobs=miller.markers,
+        ncol=3
+)
+```
+
+```{r, kdm6_ezh2_vlnplots, fig.height=8}
+ezh2 <- VlnPlot(subset(miller, EZH2 > 0), 
+        features = 'EZH2',
+        group.by = 'cell_type') + 
+        NoLegend() + 
+        labs(x='')
+
+kdm6a <- VlnPlot(subset(miller, KDM6A > 0), 
+        features = 'KDM6A',
+        group.by = 'cell_type') + 
+        NoLegend() + 
+        labs(x='')
+ezh2 + kdm6a
+```
+
+
+```{r, fig.width=12, fig.height=12}
+utxVsUp <- subset(miller, KDM6A > 0 ) %>%
+  FetchData(vars = c('KDM6A', 'UTX_sign_up', 'cell_type')) %>%
+        ggscatter(
+  x = "KDM6A", 
+  y = "UTX_sign_up",
+  color = "cell_type", 
+  palette = "jco",
+  add = "reg.line"
+  ) +
+  facet_wrap(~cell_type) +
+  stat_cor(label.y = 0.08) +
+  stat_regline_equation(label.y = 0.06) 
+
+
+ezh2VsUp <- subset(miller, EZH2 > 0) %>%
+  FetchData(vars = c('KDM6A', 'EZH2', 'UTX_sign_up', 'cell_type')) %>%
+        ggscatter(
+  x = "EZH2", 
+  y = "UTX_sign_up",
+  color = "cell_type", 
+  palette = "jco",
+  add = "reg.line"
+  ) +
+  facet_wrap(~cell_type) +
+  stat_cor(label.y = 0.08) +
+  stat_regline_equation(label.y = 0.06) 
+
+utxVsDown <- subset(miller, KDM6A > 0 ) %>%
+  FetchData(vars = c('KDM6A', 'UTX_sign_down', 'cell_type')) %>%
+        ggscatter(
+  x = "KDM6A", 
+  y = "UTX_sign_down",
+  color = "cell_type", 
+  palette = "jco",
+  add = "reg.line"
+  ) +
+  facet_wrap(~cell_type) +
+  stat_cor(label.y = 0.12) +
+  stat_regline_equation(label.y = 0.10) 
+
+
+ezh2VsDown <- subset(miller, EZH2 > 0) %>%
+  FetchData(vars = c('KDM6A', 'EZH2', 'UTX_sign_down', 'cell_type')) %>%
+        ggscatter(
+  x = "EZH2", 
+  y = "UTX_sign_down",
+  color = "cell_type", 
+  palette = "jco",
+  add = "reg.line"
+  ) +
+  facet_wrap(~cell_type) +
+  stat_cor(label.y = 0.17) +
+  stat_regline_equation(label.y = 0.1) 
+
+gridExtra::grid.arrange(
+  utxVsUp,
+  ezh2VsUp,
+  utxVsDown,
+  ezh2VsDown
+)
+```
+
+```{r}
+ezh2VsKdm6a <- subset(miller) %>%
+  FetchData(vars = c('KDM6A', 'EZH2', 'cell_type'))
+
+## correlation of ezh2 vs kdm6a
+ezh2VsKdm6a %>%
+  ggplot(aes(x=KDM6A, y=EZH2, colour=cell_type)) +
+         geom_point() +
+         theme_bw()
+```
+ 
+ 
