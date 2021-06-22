@@ -33,6 +33,7 @@ library(pander)
 library(ggpubr)
 library(GENIE3)
 library(ggrepel)
+library(UpSetR)
 
 set.seed(333)
 
@@ -167,8 +168,6 @@ gridExtra::grid.arrange(
 
 
 
-
-
 ```{r, eval=FALSE}
 ## GRN inferred using GRANET
 
@@ -272,17 +271,14 @@ if ( ! file.exists('data/1-s2.0-S2211124721002801-mmc2.xlsx')) {
 }
 utx.sign.down <- read_xlsx('data/1-s2.0-S2211124721002801-mmc2.xlsx', 
                       sheet = 3, skip = 3) %>%
-                    unlist() %>%
-                       unname() %>% toupper()
+                    pull(Genes) %>% toupper()
 utx.sign.up <- read_xlsx('data/1-s2.0-S2211124721002801-mmc2.xlsx', 
                       sheet = 4, skip = 3) %>%
-                    unlist() %>%
-                       unname() %>% toupper()
+                    pull(Genes) %>% toupper()
 utx.sign <- read_xlsx('data/1-s2.0-S2211124721002801-mmc2.xlsx', 
                       sheet = 1, skip = 3)
 utx.sign <- dplyr::select(utx.sign, Genes) %>%
-                    unlist() %>%
-                       unname() %>% toupper()
+                    pull(Genes) %>% toupper()
 sign.list <- list(utx.sign.up=utx.sign.up, 
                   utx.sign.down=utx.sign.down,
                   utx.sign=utx.sign)
@@ -356,6 +352,12 @@ this cluster.
 From looking also UTX gene expression we can conclude that this factor could be expressed and
 active in memory cells cluster.
 
+# UTX signatures scores in maike dataset
+
+The following violin plots show score values of the UTX signature split by 
+up- and down-regulated genes sets.
+
+
 ```{r, violin_plot, fig.align='center'}
 up.plot <- dittoPlot(seurat, "UTX_sign_up", 
           group.by = "nina_annotations",
@@ -390,8 +392,10 @@ gridExtra::grid.arrange(
 )
 ```
 
+
 From the violin plots it can be seen that the UTX signature score for upregulated genes is 
 higher in memory clusters.
+
 
 ```{r}
 DotPlot(seurat, 
@@ -399,6 +403,133 @@ DotPlot(seurat,
         group.by = 'nina_annotations', dot.scale = 20) +
         scale_color_viridis(option = 'viridis') +
         labs(x='', y='')
+```
+## UTX dependent/independent signatures
+
+```{r, checking_methylation_data}
+me3 <- import('https://ars.els-cdn.com/content/image/1-s2.0-S2211124721002801-mmc4.xlsx', 
+              which = 'Significant H3K27me3 peaks 20kb', 
+              skip=3)
+
+utx.peaks <- import('https://ars.els-cdn.com/content/image/1-s2.0-S2211124721002801-mmc5.xlsx',
+                       which = 'Significant UTX peaks 20kb',
+                       skip = 3)
+
+#table(me3$`RNA in KO`)
+vln.plot.me3 <- me3 %>%
+  mutate('RNA_in_UTX_null'=`RNA in KO`) %>%
+  mutate(RNA_in_UTX_null=ifelse(RNA_in_UTX_null=='NA', 
+                                'Even', RNA_in_UTX_null)) %>%
+  mutate(RNA_in_UTX_null=factor(RNA_in_UTX_null,
+                                levels = c('Even', 'Down', 'Up'))) %>%
+  ggplot(aes(x=RNA_in_UTX_null, y=`logFC D15 WTvsKO`,
+             fill=RNA_in_UTX_null)) + 
+        geom_violin() +
+        scale_fill_manual(values = c('black', 'darkorchid2', 'green3')) +
+        theme_bw() +
+        theme(legend.position = 'none') +
+        labs(x='Up/Down regulation in DEG',
+             y='Log2FC in H3K27me3 in UTX mutant',
+             fill='')
+
+geom.bar.me3 <- me3 %>%
+  ggplot(aes(x=`Significant in KO`, 
+             y=`logFC D15 WTvsKO`, 
+             fill=`Significant in KO`)) +
+        geom_boxplot() + 
+        theme_bw() +
+        theme(legend.position = 'none') +
+             labs(x='Up/Down regulation in UTX mutant',
+             y='Log2FC in H3K27me3 in UTX mutant',
+             fill='') +
+             scale_fill_manual(values = c('darkorchid2', 'green3'))
+
+gridExtra::grid.arrange(
+  grobs = list(vln.plot.me3, geom.bar.me3),
+  ncol = 2
+)
+```
+
+```{r}
+utx.peaks <- filter(utx.peaks, `logFC D15 WTvsKO` < 0 )
+
+me3 <- me3 %>%
+  filter(`Nearby Gene` %in% utx.peaks$`Nearby Gene`)
+
+
+#me3$`Significant in KO` %>% table()
+down.met3 <- filter(me3, `Significant in KO` == 'Down') %>%
+                 pull(`Nearby Gene`) %>% unique()
+up.met3 <- filter(me3, `Significant in KO` == 'Up') %>%
+                 pull(`Nearby Gene`) %>% unique()
+
+me3.indep <- sign.list$utx.sign.down[sign.list$utx.sign.down %in%
+                                        toupper(up.met3)]
+me3.dep <- sign.list$utx.sign.down[sign.list$utx.sign.down %in%
+                                             toupper(down.met3)]
+me3.sign <- list(me3.dep=me3.dep,
+                 me3.indep=me3.indep)
+
+#sign.list$utx.sign.down %>% unique() %>% length()
+lapply(me3.sign, length)
+
+## Scoring cells with signatures
+seurat.rna <- AddModuleScore(seurat.rna, 
+                         features = me3.sign, 
+                         name = paste0(names(me3.sign), '_'))
+#seurat.rna@meta.data %>% colnames()
+scores <- dplyr::select(seurat.rna@meta.data, `me3.dep_1`:`me3.indep_2`)
+colnames(scores) <- c('UTX_dep', 'UTX_ind')
+
+dep.plot <- dittoPlot(seurat.rna, "me3.dep_1", 
+          group.by = "nina_annotations",
+    plots = c("vlnplot", "jitter", "boxplot"),
+    jitter.color = "blue", jitter.size = 0.5,
+    boxplot.color = "white", boxplot.width = 0.1,
+    boxplot.fill = FALSE,
+    vlnplot.scaling = "count"
+    ) + 
+  labs(x='', y='UTX Signature Score') +
+  ggtitle('Me3 Dependent') +
+  theme(legend.position = 'none',
+        axis.text.x = element_text(size = 16)) +
+  scale_fill_manual(values=c('salmon', 'orange', 'cyan3'))
+
+ind.plot <- dittoPlot(seurat.rna, "me3.indep_2", 
+          group.by = "nina_annotations",
+    plots = c("vlnplot", "jitter", "boxplot"),
+    jitter.color = "blue", jitter.size = 0.5,
+    boxplot.color = "white", boxplot.width = 0.1,
+    boxplot.fill = FALSE,
+    vlnplot.scaling = "count"
+    ) + 
+  labs(x='', y='UTX Signature Score') +
+  ggtitle('Me3 Independent') +
+  theme(legend.position = 'none',
+        axis.text.x = element_text(size = 16)) +
+  scale_fill_manual(values=c('salmon', 'orange', 'cyan3'))
+
+gridExtra::grid.arrange(
+  grobs = list(dep.plot,
+               ind.plot),
+  ncol = 2
+)
+```
+
+```{r}
+DotPlot(seurat.rna, 
+        features = c('me3.dep_1', 'me3.indep_2'),
+        group.by = 'nina_annotations',
+        dot.scale = 20) +
+        scale_colour_viridis() +
+        labs(x = '', y = '')
+```
+
+```{r}
+DotPlot(seurat.rna,
+        features = me3.sign$me3.dep,
+        group.by = 'nina_annotations') +
+      theme(axis.text.x = element_blank())
 ```
 
 
@@ -454,12 +585,14 @@ gridExtra::grid.arrange(
 )
 ```
 
+
+
+
+```{r, genie3, eval=FALSE}
 ## Co-regulation of UTX
 
-We explored the differential regulation of UTX in memory and exhausted cells.
+#We explored the differential regulation of UTX in memory and exhausted cells.
 
-
-```{r, genie3}
 ## Extracting mem and exh counts matrices
 seu.list <- SplitObject(seurat.rna, split.by = 'nina_annotations')
 mtx.list <- lapply(seu.list, function(x) x@assays$RNA@scale.data)
@@ -527,7 +660,7 @@ miller.clusters
 
 
 
-```{r, fig.width=9}
+```{r, utx_sign_miller, fig.width=9}
 ## checking genes names in the list and in miller intersect
 #lapply(sign.list, length)
 #lapply(sign.list, function(x) length(intersect(x, rownames(miller))))
@@ -573,7 +706,7 @@ miller.up.plot <- dittoPlot(subset(miller,
     vlnplot.scaling = "count"
     ) + 
   labs(x='', y='UTX Signature Score (Upregulated genes)') +
-  ggtitle('Upregulated genes') +
+  ggtitle('Upregulated genes in KO') +
   theme(legend.position = 'none',
         axis.text.x = element_text(size = 16)) 
 
@@ -588,7 +721,7 @@ miller.down.plot <- dittoPlot(subset(miller,
     vlnplot.scaling = "count"
     ) + 
   labs(x='', y='UTX Signature Score (Downregulated genes)') +
-  ggtitle('Downregulated genes') +
+  ggtitle('Downregulated genes in KO') +
   theme(legend.position = 'none',
         axis.text.x = element_text(size = 16)) 
 
@@ -597,6 +730,83 @@ gridExtra::grid.arrange(
   ncol=2
 )
 ```
+
+# UTX signatures in the Miller data
+
+```{r, utx_dep_ind_sign_miller, fig.width=9}
+## checking genes names in the list and in miller intersect
+lapply(me3.sign, length)
+lapply(me3.sign, function(x) length(intersect(x, rownames(miller))))
+
+miller <- AddModuleScore(miller, 
+                             features = me3.sign, 
+                             name = paste0(names(me3.sign), '_'))
+colnames(miller@meta.data)
+
+## Plotting scores
+scores <- dplyr::select(miller@meta.data, `me3.dep_1`:`me3.indep_2`)
+colnames(scores) <- c('UTX_dep', 'UTX_ind')
+miller@meta.data <- cbind(miller@meta.data, scores)
+```
+
+
+```{r}
+miller.me3.dep.plot <- dittoPlot(subset(miller, 
+                                     cell_type %in% c('Progenitor Ex', 'Terminally Ex')), 
+          "UTX_dep", 
+          group.by = "cell_type",
+    plots = c("jitter", "vlnplot", "boxplot"),
+    jitter.color = "blue", jitter.size = 0.5,
+    boxplot.color = "white", boxplot.width = 0.1,
+    boxplot.fill = FALSE,
+    vlnplot.scaling = "count"
+    ) + 
+  labs(x='', y='UTX Signature Score') +
+  ggtitle('Me3 Dependent') +
+  theme(legend.position = 'none',
+        axis.text.x = element_text(size = 16)) 
+
+miller.me3.ind.plot <- dittoPlot(subset(miller, 
+                                     cell_type %in% c('Progenitor Ex', 'Terminally Ex')), 
+          "UTX_ind", 
+          group.by = "cell_type",
+    plots = c("jitter", "vlnplot", "boxplot"),
+    jitter.color = "blue", jitter.size = 0.5,
+    boxplot.color = "white", boxplot.width = 0.1,
+    boxplot.fill = FALSE,
+    vlnplot.scaling = "count"
+    ) + 
+  labs(x='', y='UTX Signature Score') +
+  ggtitle('Me3 Independent') +
+  theme(legend.position = 'none',
+        axis.text.x = element_text(size = 16)) 
+
+gridExtra::grid.arrange(
+  grobs = list(miller.me3.dep.plot, miller.me3.ind.plot),
+  ncol=2
+)
+```
+
+
+```{r, dotplot_utx_depInd}
+DotPlot(subset(miller, cell_type %in% c('Progenitor Ex',
+                                         'Terminally Ex')), 
+        features = c('UTX_dep', 'UTX_ind'),
+        group.by = 'cell_type',
+        dot.scale = 15) +
+        scale_colour_viridis() +
+        labs(x='', y='')
+```
+
+```{r}
+DotPlot(subset(miller, cell_type %in% c('Terminally Ex', 'Progenitor Ex')),
+        features = me3.sign$me3.dep,
+        group.by = 'cell_type',
+        dot.scale = 15) +
+      theme(axis.text.x = element_blank())
+```
+
+# UTX related markers expression in the Miller data
 
 
 ```{r, markers_expression_miller}
@@ -695,15 +905,3 @@ gridExtra::grid.arrange(
 )
 ```
 
-```{r}
-ezh2VsKdm6a <- subset(miller) %>%
-  FetchData(vars = c('KDM6A', 'EZH2', 'cell_type'))
-
-## correlation of ezh2 vs kdm6a
-ezh2VsKdm6a %>%
-  ggplot(aes(x=KDM6A, y=EZH2, colour=cell_type)) +
-         geom_point() +
-         theme_bw()
-```
- 
- 
