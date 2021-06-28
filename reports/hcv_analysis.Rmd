@@ -404,7 +404,14 @@ DotPlot(seurat,
         scale_color_viridis(option = 'viridis') +
         labs(x='', y='')
 ```
+
 ## UTX dependent/independent signatures
+
+
+The violin plot on the left shows trimethylation Log FC values changes respect to the UTX mutant,
+separating the genes according to their changes in UTX KO. The right violin plot shows the 
+definition of genes with up/down trimethylated values.
+
 
 ```{r, checking_methylation_data}
 me3 <- import('https://ars.els-cdn.com/content/image/1-s2.0-S2211124721002801-mmc4.xlsx', 
@@ -439,7 +446,7 @@ geom.bar.me3 <- me3 %>%
         geom_boxplot() + 
         theme_bw() +
         theme(legend.position = 'none') +
-             labs(x='Up/Down regulation in UTX mutant',
+             labs(x='Up/Down trimethylation in UTX mutant',
              y='Log2FC in H3K27me3 in UTX mutant',
              fill='') +
              scale_fill_manual(values = c('darkorchid2', 'green3'))
@@ -450,34 +457,52 @@ gridExtra::grid.arrange(
 )
 ```
 
+
+
+# Scoring cells using the UTX enzymatic dependent/independent signatures
+
+
+The following violin plots show the scoring of the cells with the UTX enzymatic dependent/independent
+signature (left/right) according to the Memory-like (mem), Transitory (trans) and Exhausted (exh)
+cell types.
+
+
 ```{r}
+#################################################################################
+##                                                                             ##
+##        Definition of the Dependent and independent signatures.              ##
+##                                                                             ##
+#################################################################################
+#dim(utx.peaks)
+# [1] 4780   31
 utx.peaks <- filter(utx.peaks, `logFC D15 WTvsKO` < 0 )
+#dim(utx.peaks)
+#[1] 4762   31.   ## Allmost all genes provided in this list are down-regulated in KO
 
 me3 <- me3 %>%
   filter(`Nearby Gene` %in% utx.peaks$`Nearby Gene`)
 
 
-#me3$`Significant in KO` %>% table()
+## Extracting up/down methylated genes
 down.met3 <- filter(me3, `Significant in KO` == 'Down') %>%
                  pull(`Nearby Gene`) %>% unique()
 up.met3 <- filter(me3, `Significant in KO` == 'Up') %>%
                  pull(`Nearby Gene`) %>% unique()
-
-me3.indep <- sign.list$utx.sign.down[sign.list$utx.sign.down %in%
-                                        toupper(up.met3)]
+## Splitting genes by up/down regulated genes
 me3.dep <- sign.list$utx.sign.down[sign.list$utx.sign.down %in%
+                                        toupper(up.met3)]
+me3.indep <- sign.list$utx.sign.down[sign.list$utx.sign.down %in%
                                              toupper(down.met3)]
 me3.sign <- list(me3.dep=me3.dep,
                  me3.indep=me3.indep)
 
-#sign.list$utx.sign.down %>% unique() %>% length()
-lapply(me3.sign, length)
+
+signature.size <- lapply(me3.sign, length)
 
 ## Scoring cells with signatures
 seurat.rna <- AddModuleScore(seurat.rna, 
                          features = me3.sign, 
                          name = paste0(names(me3.sign), '_'))
-#seurat.rna@meta.data %>% colnames()
 scores <- dplyr::select(seurat.rna@meta.data, `me3.dep_1`:`me3.indep_2`)
 colnames(scores) <- c('UTX_dep', 'UTX_ind')
 
@@ -516,6 +541,15 @@ gridExtra::grid.arrange(
 )
 ```
 
+
+The dependent and independent signatures sizes are `r signature.size$me3.dep` and `r signature.size$me3.indep`,
+respectively.
+
+
+The following dotplot shows the expression and percentage of cells expressing the signature 
+of UTX enzymatic dependent/independent signatures.
+
+
 ```{r}
 DotPlot(seurat.rna, 
         features = c('me3.dep_1', 'me3.indep_2'),
@@ -525,6 +559,9 @@ DotPlot(seurat.rna,
         labs(x = '', y = '')
 ```
 
+The next dotplot show the expression of single markers in the UTX enzymatic dependent signature.
+
+
 ```{r}
 DotPlot(seurat.rna,
         features = me3.sign$me3.dep,
@@ -532,6 +569,94 @@ DotPlot(seurat.rna,
       theme(axis.text.x = element_blank())
 ```
 
+# Correlation of dependent and independent signatures to UTX GE
+
+
+The following scatter plots shows linear regression of UTX values to UTX (KDM6A)
+gene expression.
+
+
+```{r, correlation_utx_dep_ind_maike, fig.height=12, fig.width=8}
+## Extracting signatures and UTX gene expression
+utx.sign.df <-  FetchData(seurat.rna, 
+                          vars = c('nina_annotations',
+                                   'me3.dep_1',
+                                   'me3.indep_2',
+                                   'rna_KDM6A')) 
+
+dep.maike.plot <- utx.sign.df  %>%
+  rename(KDM6A=rna_KDM6A) %>%
+  filter(KDM6A > 0) %>%
+ggscatter(
+  x = "KDM6A", 
+  y = "me3.dep_1",
+  color = "nina_annotations", 
+  palette = "jco",
+  add = "reg.line", 
+  ) +
+  facet_wrap(~nina_annotations) +
+  stat_cor(label.y = 0.04) +
+  stat_regline_equation(label.y = 0.02) +
+  scale_color_manual(values=c('salmon', 'orange', 'cyan3'))
+
+ind.maike.plot <- utx.sign.df  %>%
+  rename(KDM6A=rna_KDM6A) %>%
+  filter(KDM6A > 0) %>%
+ggscatter(
+  x = "KDM6A", 
+  y = "me3.indep_2",
+  color = "nina_annotations", 
+  palette = "jco",
+  add = "reg.line"
+  ) +
+  facet_wrap(~nina_annotations) +
+  stat_cor(label.y = 0.08) +
+  stat_regline_equation(label.y = 0.06) +
+  scale_color_manual(values=c('salmon', 'orange', 'cyan3'))
+
+gridExtra::grid.arrange(
+  dep.maike.plot,
+  ind.maike.plot, 
+  ncol=1
+)
+```
+
+In the following UMAPs the scores for the UTX enzymatic dependent and independent
+signatures are shown.
+
+
+```{r, fig.width=11, fig.height=5}
+## Annotating cells with UMAP projection
+umap.df <- FetchData(seurat, vars = c('UMAP_1', 'UMAP_2'))
+## Checking cells order
+any(colnames(seurat) != rownames(umap.df))
+seurat.rna@meta.data <- cbind(seurat.rna@meta.data,
+                              umap.df) 
+
+umap.dep <- seurat.rna@meta.data %>%
+    ggplot(aes(x=UMAP_1, y=UMAP_2,
+               colour = me3.dep_1)) +
+        geom_point(size=2.5) +
+        scale_color_viridis() +
+        theme_bw() +
+        theme(panel.grid = element_blank()) +
+        labs(colour='UTX dep') 
+
+umap.indep <- seurat.rna@meta.data %>%
+    ggplot(aes(x=UMAP_1, y=UMAP_2,
+               colour = me3.indep_2)) +
+        geom_point(size=2.5) +
+        scale_color_viridis() +
+        theme_bw() +
+        theme(panel.grid = element_blank()) +
+        labs(colour='UTX indep')
+
+gridExtra::grid.arrange(
+  umap.dep, 
+  umap.indep,
+  ncol=2
+)
+```
 
 ## UTX signature vs UTX gene expression correlation
 
@@ -641,7 +766,9 @@ genie3.df %>%
 
 ```
 
+
 ## Loading Miller data
+
 
 AG-specific CD8 T cells were pre-processed from [Miller B et al, 2019](https://www.nature.com/articles/s41590-019-0312-6). The pre-processing is documented
 in the `src/seurat.R` file.
@@ -694,6 +821,9 @@ gridExtra::grid.arrange(
 )
 ```
 
+Violin plots showing the UTX signatures in Progenitor-Like and Terminally exhausted cells from
+the Miller et al, 2020 dataset. 
+
 ```{r}
 miller.up.plot <- dittoPlot(subset(miller, 
                                      cell_type %in% c('Progenitor Ex', 'Terminally Ex')), 
@@ -735,13 +865,13 @@ gridExtra::grid.arrange(
 
 ```{r, utx_dep_ind_sign_miller, fig.width=9}
 ## checking genes names in the list and in miller intersect
-lapply(me3.sign, length)
-lapply(me3.sign, function(x) length(intersect(x, rownames(miller))))
+#lapply(me3.sign, length)
+#lapply(me3.sign, function(x) length(intersect(x, rownames(miller))))
 
 miller <- AddModuleScore(miller, 
                              features = me3.sign, 
                              name = paste0(names(me3.sign), '_'))
-colnames(miller@meta.data)
+#colnames(miller@meta.data)
 
 ## Plotting scores
 scores <- dplyr::select(miller@meta.data, `me3.dep_1`:`me3.indep_2`)
@@ -750,9 +880,14 @@ miller@meta.data <- cbind(miller@meta.data, scores)
 ```
 
 
+## Scoring cells using UTX enzymatic dependent and independent signatures
+
+The following violin plots show the scores of UTX enzymatic dependent and independent 
+signatures in the cell subpopulations from the Miller data.
+
+
 ```{r}
-miller.me3.dep.plot <- dittoPlot(subset(miller, 
-                                     cell_type %in% c('Progenitor Ex', 'Terminally Ex')), 
+miller.me3.dep.plot <- dittoPlot(miller, 
           "UTX_dep", 
           group.by = "cell_type",
     plots = c("jitter", "vlnplot", "boxplot"),
@@ -766,8 +901,7 @@ miller.me3.dep.plot <- dittoPlot(subset(miller,
   theme(legend.position = 'none',
         axis.text.x = element_text(size = 16)) 
 
-miller.me3.ind.plot <- dittoPlot(subset(miller, 
-                                     cell_type %in% c('Progenitor Ex', 'Terminally Ex')), 
+miller.me3.ind.plot <- dittoPlot(miller, 
           "UTX_ind", 
           group.by = "cell_type",
     plots = c("jitter", "vlnplot", "boxplot"),
@@ -788,9 +922,11 @@ gridExtra::grid.arrange(
 ```
 
 
+Dotplot showing UTX enzymatic dependent and independent signatures in 
+cell subpopulations from the Miller data.
+
 ```{r, dotplot_utx_depInd}
-DotPlot(subset(miller, cell_type %in% c('Progenitor Ex',
-                                         'Terminally Ex')), 
+DotPlot(miller, 
         features = c('UTX_dep', 'UTX_ind'),
         group.by = 'cell_type',
         dot.scale = 15) +
@@ -798,8 +934,13 @@ DotPlot(subset(miller, cell_type %in% c('Progenitor Ex',
         labs(x='', y='')
 ```
 
+
+Dotplot showing gene expression of markers belonging to the UTX enzymatic dependent
+signature.
+
+
 ```{r}
-DotPlot(subset(miller, cell_type %in% c('Terminally Ex', 'Progenitor Ex')),
+DotPlot(miller,
         features = me3.sign$me3.dep,
         group.by = 'cell_type',
         dot.scale = 15) +
@@ -808,6 +949,8 @@ DotPlot(subset(miller, cell_type %in% c('Terminally Ex', 'Progenitor Ex')),
 
 # UTX related markers expression in the Miller data
 
+
+Gene expression of markers related to UTX signatures.
 
 ```{r, markers_expression_miller}
 miller.markers <- FeaturePlot(miller, 
@@ -905,3 +1048,55 @@ gridExtra::grid.arrange(
 )
 ```
 
+
+## Correlation of UTX dependent and independent signatures to UTX GE
+
+```{r, fig.width=12, fig.height=12}
+
+dep.miller.plot <- subset(miller, KDM6A > 0) %>%
+  FetchData(vars = c('KDM6A', 'me3.dep_1', 'cell_type')) %>%
+        ggscatter(
+  x = "KDM6A", 
+  y = "me3.dep_1",
+  color = "cell_type", 
+  palette = "jco",
+  add = "reg.line"
+  ) +
+  facet_wrap(~cell_type) +
+  stat_cor(label.y = 0.08) +
+  stat_regline_equation(label.y = 0.06) 
+
+
+indep.miller.plot <- subset(miller, KDM6A > 0) %>%
+  FetchData(vars = c('KDM6A', "me3.indep_2", 'cell_type')) %>%
+        ggscatter(
+  x = "KDM6A", 
+  y = "me3.indep_2",
+  color = "cell_type", 
+  palette = "jco",
+  add = "reg.line"
+  ) +
+  facet_wrap(~cell_type) +
+  stat_cor(label.y = 0.08) +
+  stat_regline_equation(label.y = 0.06) 
+
+gridExtra::grid.arrange(
+  indep.miller.plot,
+  dep.miller.plot,
+  ncol=1
+)
+```
+
+
+In the following UMAPs the scores for the UTX enzymatic dependent and independent and
+independent signatures are shown.
+
+
+```{r, fig.width=11, fig.height=6}
+umap.utx <- FeaturePlot(miller, 
+            features = c('me3.dep_1', 'me3.indep_2'), 
+            combine = FALSE)
+umap.utx <- lapply(umap.utx, function(x) x + scale_color_viridis())
+
+gridExtra::grid.arrange(grobs=umap.utx, ncol=2)
+```
