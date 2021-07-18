@@ -1,0 +1,138 @@
+---
+title: "Senescence, proliferation and activation signatures"
+author: "Health Data Unit"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    code_folding: hide
+  pdf_document: default
+---
+
+
+# Intro
+
+This report contain documentation of the analysis of CD8 T cells from chronic HCV
+patients. This is a project in collaboration with the Liver Immunology Lab lead by
+Dr. Maike Hoffmann in the Department of Medicine from the University of Freiburg.
+
+
+```{r setup, include=FALSE}
+## Dependencies
+library(tidyverse)
+library(Seurat)
+library(KEGGREST)
+library(reshape2)
+library(GGally)
+library(viridis)
+
+set.seed(333)
+
+knitr::opts_chunk$set(
+        warning = FALSE, 
+        message = FALSE,
+        cache = FALSE,
+        fig.align='center'
+)
+
+## Setting paths
+path2project <- '/media/ag-cherrmann/cramirez/tcd8ExscSeq/'
+knitr::opts_knit$set(
+        root.dir = path2project
+)
+```
+
+
+```{r, loading_kegg_signatures}
+## Function modified from https://www.biostars.org/p/366067/
+getKEGG <- function(id){
+  #Get the list of numbers, gene symbols and gene description
+  names <- keggGet(id)[[1]]$GENE
+  #Delete the gene number by deleting every other line
+  namesodd <-  names[seq(0,length(names),2)]
+  #Create a substring deleting everything after the ; on each line (this deletes the gene description).
+  namestrue <- gsub("\\;.*","",namesodd)
+  return(namestrue)
+}
+
+signatures <- c(senescence_human='hsa04218',
+                senescence_mouse='mmu04218',
+                cycling_human='hsa04110',
+                cycling_mouse='mmu04110',
+                tcell_activation_human='hsa04660',
+                tcell_activation_mouse='mmu04660')
+
+signatures.list <- lapply(signatures, getKEGG)
+signatures.list <- lapply(signatures.list, toupper)
+```
+## Loading Maike dataset
+
+```{r, loading_maike_dataset}
+seurat <- readRDS('data/maike2020/hofmann_hcv_seu.rds')
+seurat <- subset(seurat, nina_annotations %in% c('mem', 'exh', 'trans'))
+
+seurat <- CreateSeuratObject(counts = seurat@assays$RNA@counts,
+                             project = 'CD8 T cells', 
+                             assay = 'RNA', 
+                             min.cells = 1, 
+                             min.features = 1, 
+                             meta.data = seurat@meta.data)
+seurat <- NormalizeData(seurat) %>% ScaleData()
+```
+
+## Scoring cells
+
+```{r, scoring_cells}
+seurat <- AddModuleScore(seurat, 
+                         features = signatures.list, 
+                         name = names(signatures.list))
+```
+
+
+```{r, violin_plots}
+#VlnPlot(seurat, 
+#        group.by = 'nina_annotations',
+#        features = colnames(seurat@meta.data)[8:13],
+#        stack = TRUE) +
+#       theme(legend.position = 'None')
+
+FetchData(seurat, 
+          vars = colnames(seurat@meta.data)) %>%
+          select(nina_annotations, senescence_human1:tcell_activation_mouse6) %>%
+          melt() %>%
+          ggplot(aes(x=variable, y=value,
+                     fill=nina_annotations)) +
+                 geom_boxplot() +
+                 coord_flip() +
+                 labs(x='', y='Signature Score',
+                      fill='') +
+                 theme_bw() 
+                 
+```
+
+
+```{r, scatter_plots, fig.width=12, fig.height=12}
+ggpairs(select(seurat@meta.data, 
+               nina_annotations,
+               senescence_human1:tcell_activation_mouse6), 
+         aes(colour = nina_annotations, alpha = 0.4)) +
+         theme_bw()
+```
+
+
+```{r, gene_expression_visualization, fig.width=6, fig.height=4}
+selected_genes <- c('DNMT3A', 'KMT', 'TET',
+                    'KMT2C', 'KMT2E', 'TET1', 'TET2',
+                    'KMT1A', 'SUV39H1', 'BRD4', 'KDM',
+                    'HDAC1', 'HDAC2', 'HDAC3', 'HDAC9',
+                    'HDAC11', 'CBP', 'KAT6A', 'CARM1', 'SREBF1', 'SREB2')
+
+DotPlot(seurat, 
+        features = selected_genes, 
+        group.by = 'nina_annotations',
+        dot.scale = 12) +
+        coord_flip() +
+        scale_color_viridis() +
+        labs(x='', y='')
+```
+
+## 
