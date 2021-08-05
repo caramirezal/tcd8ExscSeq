@@ -1,0 +1,158 @@
+---
+title: "CCR7 analysis"
+author: "Health Data Unit"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    code_folding: hide
+  pdf_document: default
+---
+
+
+# Intro
+
+This report contain documentation of the analysis of CD8 T cells from chronic HCV
+patients.
+
+
+```{r setup, include=FALSE}
+## Dependencies
+library(ggplot2)
+library(tidyverse)
+library(dplyr)
+library(Nebulosa)
+library(rmarkdown)
+library(Seurat)
+
+set.seed(333)
+
+knitr::opts_chunk$set(
+        warning = FALSE, 
+        message = FALSE,
+        cache = FALSE,
+        fig.align='center'
+)
+
+## Setting paths
+path2project <- '/media/ag-cherrmann/cramirez/tcd8ExscSeq/'
+knitr::opts_knit$set(
+        root.dir = path2project
+)
+
+## Interesting genes
+genes.sel <- c('IL7R', 'TCF7', 'EOMES', 'TBX21', 'SELL', 'BCL2', 'BCL6',
+               'STAT3', 'STAT4', 'PRDM1')
+genes.sel <- toupper(genes.sel) 
+```
+
+
+## Visualization of TFs
+
+
+
+ * Checking if genes are present in the count matrix.
+
+```{r, checking_count_matrix}
+## Maike Hoffman data preprocessing
+## gene names must be standardized
+himmer <- read.csv('data/maike2020/nina_thimme_raw_counts.csv', 
+                   header = TRUE)
+r_names <- himmer$X
+himmer <- dplyr::select(himmer, -X)
+himmer_mtx <- apply(himmer, 2, as.numeric)
+rownames(himmer_mtx) <- gsub('__chr.*', '', r_names) 
+
+#sapply(genes.sel, function(x) x %in% toupper(rownames(himmer_mtx)))
+```
+
+Genes are present in the initial matrix but lost in a further step.
+
+ * Then, normalized gene expression of the markers in the initial uncorrected matrix were projected
+ onto the corrected UMAPs as shown in the next plots.
+ 
+ 
+# Joint expression of markers with CCR7
+
+## Densities 
+
+```{r, densities, fig.width=14, fig.height=14}
+seurat <- readRDS('data/maike2020/hofmann_hcv_seu.rds')
+seurat <- subset(seurat, nina_annotations %in% c('mem', 'exh', 'trans'))
+#seurat <- UpdateSeuratObject(seurat)
+cell_types <- DimPlot(seurat, 
+                      group.by = 'nina_annotations', 
+                      pt.size = 2.5, 
+                      combine = FALSE)
+
+
+## Creating an additional seurat object to store RNA
+## uncorrected data
+seurat.rna <- CreateSeuratObject(
+  counts = himmer_mtx,
+  project = 'HBV_RNA', 
+  assay = 'RNA', 
+  min.cells = 0, 
+  min.features = 0,
+  meta.data = seurat@meta.data
+)
+
+## Checking cells are the same and in the same order
+#any(colnames(seurat) != colnames(seurat.rna))
+#[1] FALSE       ## They are!
+
+## Normalization of the non-integrated data
+seurat.rna <- ScaleData(seurat.rna) %>% NormalizeData()
+## Extraction of the markers
+sapply(genes.sel, function(x) x %in% rownames(seurat.rna))
+markers.rna <- FetchData(seurat.rna, vars = genes.sel) 
+colnames(markers.rna) <- paste0('rna_', colnames(markers.rna))
+
+## Adding markers to the corrected UMAP representation
+#seurat@meta.data <- cbind(seurat@meta.data, markers.rna)
+for (gene in genes.sel){
+  FeaturePlot(seurat, 
+             features = c('rna_', paste0('rna_', gene)),
+             pt.size = 2.5, 
+             combine = FALSE)
+}
+
+names(genes.sel) <- genes.sel
+density_plots <- lapply(genes.sel, function(gene){
+  plot_density(seurat, 
+             features = c('rna_CCR7', paste0('rna_', gene)),
+             size = 2.5, 
+             joint = TRUE, 
+             combine = FALSE)[[3]] +
+    ggtitle(paste0('CCR7+', '', gene, '+')) +
+    theme_void()
+})
+
+markers.list <- c(cell_types, density_plots)
+gridExtra::grid.arrange(
+        grobs=markers.list,
+        ncol=3
+)
+```
+
+
+## Gene expression
+
+```{r, gene_expression, fig.width=14, fig.height=20}
+plots <- list()
+for (gene in genes.sel) {
+  new.plot <- FeaturePlot(seurat, 
+            features = c('rna_CCR7', paste0('rna_', gene)),
+            pt.size = 2.5, 
+            blend = TRUE,
+            blend.threshold = 0.05, 
+            combine = FALSE)
+  plots <- c(plots, new.plot)
+}
+length(plots)
+
+
+gridExtra::grid.arrange(
+  grobs = plots,
+  ncol=4
+)
+```
