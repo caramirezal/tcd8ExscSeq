@@ -1,0 +1,201 @@
+---
+title: "Regulatory network inference"
+author: "Health Data Unit"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    code_folding: hide
+  pdf_document: default
+---
+
+
+# Intro
+
+This report contain documentation of the analysis of CD8 T cells from chronic HCV
+patients.
+
+
+```{r}
+library(rio)
+library(ggplot2)
+library(tidyverse)
+library(motifmatchr)
+library(TFBSTools)
+library(JASPAR2020)
+library(GenomicRanges)
+library(BSgenome)
+library(ggVennDiagram)
+library(grid)
+library(Gviz)
+ library(Homo.sapiens)
+
+## Rmarkdown Settings
+knitr::opts_chunk$set(
+        warning = FALSE, 
+        message = FALSE,
+        cache = FALSE,
+        fig.align = 'center'
+)
+
+set.seed(333)
+
+path2project <- '/media/ag-cherrmann/cramirez/'
+```
+
+
+# Reading peaks
+
+* The data was taken from [Kathleen B. Y. et al, 2021](https://www.nature.com/articles/s41590-021-00979-1?proof=t#additional-information). 
+
+
+The next table shows the universe of ChARs identified in all conditions.
+
+
+```{r, loading_peaks}
+peaks_url <- 'https://static-content.springer.com/esm/art%3A10.1038%2Fs41590-021-00979-1/MediaObjects/41590_2021_979_MOESM3_ESM.xlsx'
+
+download.file(peaks_url, '/media/ag-cherrmann/cramirez/tcd8ExscSeq/data/41590_2021_979_MOESM3_ESM.xlsx')
+peaks.df <- readxl::read_xlsx('/media/ag-cherrmann/cramirez/tcd8ExscSeq/data/41590_2021_979_MOESM3_ESM.xlsx', 
+                              sheet = 'Supplementary Table 2')
+dim(peaks.df)
+head(peaks.df)
+```
+
+# The epigenetic scar
+
+```{r, size_of_epigenetic_scar}
+universe <- pull(peaks.df, ID)
+preVspost.HCV <- filter(peaks.df, 
+                        as.numeric(`q-value: Group HCV_pre vs HCV_post`) < 0.05) %>% pull(ID)
+sets <- list(universe=universe,
+             `Pre- Vs Post-Treatment`=preVspost.HCV)
+```
+
+
+The next Venn Diagram shows the number of CHaRs in the overall universe across all conditions 
+(`r length(universe)`) and the number of differential peaks in the epigenetic scar which 
+corresponds to the comparison of Pre- vs Post-DAA treatment (`r length(preVspost.HCV)`).
+
+
+```{r}
+ggVennDiagram(sets)
+```
+
+The next vulcano plot shows the epigenetic scar.
+
+```{r, fig.height=4, fig.width=4}
+## Visualization of the epigenetic scar
+epi.scar.vulcano.plot <- peaks.df %>%
+  ggplot(aes(x=`log2FC: Group HCV_pre vs HCV_post`,
+             y=-log10(as.numeric(`q-value: Group HCV_pre vs HCV_post`)))) +
+       geom_point(alpha=0.3, size=3) +
+       geom_hline(yintercept = -log10(0.05), linetype='dashed', 
+                  color='red') +
+       theme_classic() +
+       labs(x='Log2FC: HCV pre Vs post', y='-Log10(q-Value)') +
+       annotation_custom(
+         grobTree(textGrob('q-Value=0.05', x=0.2, y=0.1),
+                gp=gpar(col='red'))
+       )
+       
+       
+epi.scar.vulcano.plot
+```
+
+# Scanning motifs in CHaRs
+
+
+
+```{r}
+## Constructing the set of PFmatrix containing all the motifs in jaspar2020
+opts <- list()
+opts[["all_versions"]] <- TRUE
+PFMatrixList <- getMatrixSet(JASPAR2020, opts)
+
+## Converting regions to GRanges
+peaks <- peaks.df
+#peaks <- filter(peaks.df, 
+#                as.numeric(`q-value: Group HCV_pre vs HCV_post`) < 0.05)
+ranges <- makeGRangesFromDataFrame(peaks, 
+                                   ignore.strand = TRUE, 
+                                   seqnames.field = 'Chr', 
+                                   start.field = 'Start',
+                                   end.field = 'End')
+
+
+motif_ix <- matchMotifs(PFMatrixList, ranges, genome = "hg19", out = 'scores') 
+dim(motifScores(motif_ix))
+head(motifScores(motif_ix))
+```
+
+# Plotting an example of ChAR 
+
+The next track plot show an interval of 100 kb around the IFNG gene.
+
+```{r}
+from <- 68548548 - 100000 
+to <- 68553520 + 100000
+ranges.12 <- ranges[seqnames(ranges)=="chr12" &
+                      from < start(ranges)  &
+                         end(ranges) < to]
+atrack <- AnnotationTrack(ranges.12)
+gtrack <- GenomeAxisTrack()
+chr <- 'chr12'
+gen <- 'hg19'
+itrack <- IdeogramTrack(genome = gen, chromosome = chr)
+
+
+knownGenes <- UcscTrack(genome = "hg19", chromosome = "chr12", 
+                        track = "knownGene", from = from, to = to,
+                        trackType = "GeneRegionTrack", 
+                        rstarts = "exonStarts", rends = "exonEnds", 
+                        gene = "name", symbol = "name", 
+                        transcript = "name", strand = "strand", 
+                        fill = "#8282d2", name = "UCSC Genes")
+
+plotTracks(list(itrack, atrack, gtrack, knownGenes))
+```
+
+# Annotating regions with genes around regions
+
+
+
+```{r, manual_annotation}
+## Distance around the peaks
+dist <- 75000
+
+## Construction of the annotated reference
+txdb <- TxDb.Hsapiens.UCSC.hg19.knownGene::TxDb.Hsapiens.UCSC.hg19.knownGene
+broads <- GenomicFeatures::genes(txdb)
+subject <- broads[ seqnames(broads) %in% seqlevels(ranges) ]
+
+## Construction of the gene annotations
+TxDb(Homo.sapiens) <- txdb
+tx.list <- transcriptsBy(Homo.sapiens, columns = "SYMBOL")
+tx <- unlist(tx.list)
+
+## Function to annotate regions to the nearest gene
+getNeighborsGenes <- function(grange, txDb_reference, dist){
+  tx.chr <- txDb_reference[seqlevels(txDb_reference) %in% seqlevels(grange)]
+  distances <- GenomicRanges::distance(grange, tx.chr)
+  names(distances) <- unlist(tx.chr$SYMBOL)
+  distances <- distances[!is.na(distances) & ! is.na(names(distances))]
+  return(distances[distances<dist])
+}
+
+distances <- c(3000, 10000, 20000, 50000, 100000)
+neighbors.list <- lapply(distances, 
+       function(distance_val){
+         lapply(1:length(ranges), 
+                    function(i){ 
+                      getNeighborsGenes(ranges[i], 
+                                        txDb_reference = tx, 
+                                        dist = distance_val)})
+})
+names(neighbors.list) <- paste0('neighborGenes_', distances)
+#lapply(neighbors.list, head)
+```
+
+
+# 
+
