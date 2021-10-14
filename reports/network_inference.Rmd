@@ -27,7 +27,9 @@ library(BSgenome)
 library(ggVennDiagram)
 library(grid)
 library(Gviz)
- library(Homo.sapiens)
+library(Homo.sapiens)
+library(rGREAT)
+library(UpSetR)
 
 ## Rmarkdown Settings
 knitr::opts_chunk$set(
@@ -39,7 +41,7 @@ knitr::opts_chunk$set(
 
 set.seed(333)
 
-path2project <- '/media/ag-cherrmann/cramirez/'
+path2project <- '/media/ag-cherrmann/cramirez/tcd8ExscSeq/'
 ```
 
 
@@ -124,6 +126,13 @@ ranges <- makeGRangesFromDataFrame(peaks,
 
 
 motif_ix <- matchMotifs(PFMatrixList, ranges, genome = "hg19", out = 'scores') 
+
+saveRDS(motif_ix, paste0(path2project,
+                         '/analysis/motifs_CHaRs_preVsPost_treatment.rds'),
+        compress = TRUE)
+saveRDS(ranges, paste0(path2project, 
+                       'analysis/ranges_CHaRs_preVsPost_treatment.rds'),
+        compress = TRUE)
 dim(motifScores(motif_ix))
 head(motifScores(motif_ix))
 ```
@@ -133,6 +142,10 @@ head(motifScores(motif_ix))
 The next track plot show an interval of 100 kb around the IFNG gene.
 
 ```{r}
+ranges <- readRDS(file = paste0(path2project,
+                         '/analysis/ranges_CHaRs_preVsPost_treatment.rds'))
+motifs_ix <- readRDS(file = paste0(path2project,
+                         '/analysis/motifs_CHaRs_preVsPost_treatment.rds'))
 from <- 68548548 - 100000 
 to <- 68553520 + 100000
 ranges.12 <- ranges[seqnames(ranges)=="chr12" &
@@ -161,9 +174,6 @@ plotTracks(list(itrack, atrack, gtrack, knownGenes))
 
 
 ```{r, manual_annotation}
-## Distance around the peaks
-dist <- 75000
-
 ## Construction of the annotated reference
 txdb <- TxDb.Hsapiens.UCSC.hg19.knownGene::TxDb.Hsapiens.UCSC.hg19.knownGene
 broads <- GenomicFeatures::genes(txdb)
@@ -174,16 +184,16 @@ TxDb(Homo.sapiens) <- txdb
 tx.list <- transcriptsBy(Homo.sapiens, columns = "SYMBOL")
 tx <- unlist(tx.list)
 
-## Function to annotate regions to the nearest gene
+## Function to annotate regions to genes around 1, 3, 10, 50 and 100 kbs
 getNeighborsGenes <- function(grange, txDb_reference, dist){
   tx.chr <- txDb_reference[seqlevels(txDb_reference) %in% seqlevels(grange)]
   distances <- GenomicRanges::distance(grange, tx.chr)
   names(distances) <- unlist(tx.chr$SYMBOL)
   distances <- distances[!is.na(distances) & ! is.na(names(distances))]
-  return(distances[distances<dist])
+  return(distances[abs(distances)<dist])
 }
 
-distances <- c(3000, 10000, 20000, 50000, 100000)
+distances <- c(1000, 3000, 5000, 10000, 50000)
 neighbors.list <- lapply(distances, 
        function(distance_val){
          lapply(1:length(ranges), 
@@ -194,8 +204,95 @@ neighbors.list <- lapply(distances,
 })
 names(neighbors.list) <- paste0('neighborGenes_', distances)
 #lapply(neighbors.list, head)
+
+granges.genes <- lapply(neighbors.list, 
+                        function(res){
+                          genes <- res %>% unlist() %>% names() %>% unique()
+                        })
+names(granges.genes) <- paste0('genes_around_', c(1, 3, 5, 10, 50), '_kb')
+
+saveRDS(granges.genes)
 ```
 
 
-# 
+```{r}
+upset(fromList(granges.genes), nsets = 20)
+```
 
+
+```{r, distances}
+distances.filtered <- neighbors.list$neighborGenes_1000 %>% 
+                             unlist() 
+sum(distances.filtered==0)
+hist(distances.filtered[distances.filtered> 0])
+```
+
+
+```{r, annotation_using_great, fig.height=5, fig.width=14, eval=FALSE}
+distances.rgreat <- c(1, 3, 5, 10, 50)
+names(distances.rgreat) <- paste0('rgreat_', distances.rgreat, '_kb')
+## Testing different windows
+job.list <- lapply(distances.rgreat, 
+                   function(distance){
+                     job <- submitGreatJob(ranges,
+                      species = 'hg19', 
+                      rule = "twoClosest", 
+                      adv_twoDistance = distance)
+                     return(job)
+                   })
+job.list <- lapply(job.list, function(job){
+              great_job <- job
+              res <- plotRegionGeneAssociationGraphs(great_job, plot=FALSE)
+              return(great_job)
+})
+
+#names(job.list)
+#job.list$rgreat_1_kb@association_tables$all$gene %>% unique() %>% length()   
+#job.list$rgreat_10_kb@association_tables$all[
+#  ! is.na(job.list$rgreat_1_kb@association_tables$all$distTSS) &
+#  job.list$rgreat_1_kb@association_tables$all$distTSS < 1000,
+#] %>% pull(gene) %>% unique() %>% length()
+plotRegionGeneAssociationGraphs(job.list$rgreat_1_kb)
+```
+
+```{r, eval=FALSE}
+rgreat.genes <- lapply(1:length(job.list), 
+                       function(index){
+                         regions.tb <- job.list[index][[1]]@association_tables$all
+                         regions.filtered <- regions.tb[ ! is.na(regions.tb$distTSS) & 
+                                                           regions.tb$distTSS < distances.rgreat[index], ] 
+                         genes <- regions.filtered %>% pull(gene) %>% unique()
+                         return(genes)
+                       })
+
+upset(fromList(rgreat.genes), 
+      nsets = 20, sets = names(rgreat.genes), 
+      keep.order = TRUE)
+```
+
+```{r, comparing_results, eval=FALSE}
+lapply(neighbors.list, head)
+
+
+neighbors.genes <- c(granges.genes, rgreat.genes)
+
+names(neighbors.genes) <- c(paste0('gRanges_', c(1, 3, 5, 10, 50), '_kb'),
+                            paste0('rGreat_', c(1, 3, 5, 10, 50), '_kb'))
+
+names(rgreat.genes) <- names(granges.genes)
+
+upset(fromList(neighbors.genes), 
+      nsets = 20, sets = names(neighbors.genes), keep.order = TRUE)
+```
+
+
+
+```{r, match_motif_annotation}
+motif_ix 
+mapped_genes <- ''
+
+lapply(neighbors.list$neighborGenes_1000,
+        function(genes){
+          names(genes)
+})
+```
