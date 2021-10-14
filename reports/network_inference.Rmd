@@ -172,6 +172,8 @@ plotTracks(list(itrack, atrack, gtrack, knownGenes))
 # Annotating regions with genes around regions
 
 
+The following upset plot show the set of genes mapped to the CHaRs in the ATAC-Seq data.
+
 
 ```{r, manual_annotation}
 ## Construction of the annotated reference
@@ -211,7 +213,6 @@ granges.genes <- lapply(neighbors.list,
                         })
 names(granges.genes) <- paste0('genes_around_', c(1, 3, 5, 10, 50), '_kb')
 
-saveRDS(granges.genes)
 ```
 
 
@@ -220,79 +221,118 @@ upset(fromList(granges.genes), nsets = 20)
 ```
 
 
+It can be observed that most of the mapped genes are located at less than 1 kb
+of distance to the corresponding associated peak.
+
+
 ```{r, distances}
 distances.filtered <- neighbors.list$neighborGenes_1000 %>% 
                              unlist() 
 sum(distances.filtered==0)
-hist(distances.filtered[distances.filtered> 0])
-```
-
-
-```{r, annotation_using_great, fig.height=5, fig.width=14, eval=FALSE}
-distances.rgreat <- c(1, 3, 5, 10, 50)
-names(distances.rgreat) <- paste0('rgreat_', distances.rgreat, '_kb')
-## Testing different windows
-job.list <- lapply(distances.rgreat, 
-                   function(distance){
-                     job <- submitGreatJob(ranges,
-                      species = 'hg19', 
-                      rule = "twoClosest", 
-                      adv_twoDistance = distance)
-                     return(job)
-                   })
-job.list <- lapply(job.list, function(job){
-              great_job <- job
-              res <- plotRegionGeneAssociationGraphs(great_job, plot=FALSE)
-              return(great_job)
-})
-
-#names(job.list)
-#job.list$rgreat_1_kb@association_tables$all$gene %>% unique() %>% length()   
-#job.list$rgreat_10_kb@association_tables$all[
-#  ! is.na(job.list$rgreat_1_kb@association_tables$all$distTSS) &
-#  job.list$rgreat_1_kb@association_tables$all$distTSS < 1000,
-#] %>% pull(gene) %>% unique() %>% length()
-plotRegionGeneAssociationGraphs(job.list$rgreat_1_kb)
-```
-
-```{r, eval=FALSE}
-rgreat.genes <- lapply(1:length(job.list), 
-                       function(index){
-                         regions.tb <- job.list[index][[1]]@association_tables$all
-                         regions.filtered <- regions.tb[ ! is.na(regions.tb$distTSS) & 
-                                                           regions.tb$distTSS < distances.rgreat[index], ] 
-                         genes <- regions.filtered %>% pull(gene) %>% unique()
-                         return(genes)
-                       })
-
-upset(fromList(rgreat.genes), 
-      nsets = 20, sets = names(rgreat.genes), 
-      keep.order = TRUE)
-```
-
-```{r, comparing_results, eval=FALSE}
-lapply(neighbors.list, head)
-
-
-neighbors.genes <- c(granges.genes, rgreat.genes)
-
-names(neighbors.genes) <- c(paste0('gRanges_', c(1, 3, 5, 10, 50), '_kb'),
-                            paste0('rGreat_', c(1, 3, 5, 10, 50), '_kb'))
-
-names(rgreat.genes) <- names(granges.genes)
-
-upset(fromList(neighbors.genes), 
-      nsets = 20, sets = names(neighbors.genes), keep.order = TRUE)
+hist(distances.filtered[distances.filtered> 0], breaks = 10)
 ```
 
 
 
-```{r, match_motif_annotation}
-motif_ix 
-mapped_genes <- ''
-
-lapply(neighbors.list$neighborGenes_1000,
+```{r, match_motif_annotation, eval=FALSE}
+## getting mapped regions
+map.genByRegion <- sapply(neighbors.list$neighborGenes_1000,
         function(genes){
-          names(genes)
+          genes.unique <- names(genes) %>% unique() 
+          if (length(genes.unique) > 0) {
+            res <- paste(genes.unique, collapse = ';')
+          } else {
+            res <- ''
+          }
+          return(res)
+}) 
+## Adding region mapping to found motifs in regions
+values(motif_ix) <- DataFrame(genes=map.genByRegion)
+## Saving information
+saveRDS(motif_ix, paste0(path2project,
+                         '/analysis/motifs_CHaRs_preVsPost_treatment.rds'),
+        compress = TRUE)
+#ngenes <- sapply(map.genByRegion, length) 
+#map.genByRegion[ngenes>1]
+
+## Getting TFs mapped to regions
+tfs.bound <- character(length = nrow(motif_ix))
+mtx <- motifMatches(motif_ix)
+for (i in 1:nrow(motif_ix)){
+  tfs.bound[i] <- paste(motif_ix@colData$name[mtx[i,]],
+                        sep = ';', collapse = ';')
+  cat('Region', i, 'has been processed\n')
+}
+head(tfs.bound)
+
+sapply(1:nrow(motif_ix), 
+       function(index){
+         motif_ix@colData$name[motifMatches(motif_ix)[index,]] %>%
+           paste(sep=';')
+       }) %>% head
+motifMatches(motif_ix)
+tfs.bound.mtx <- motif_scores(motif_ix) > 0
+tfs.bound.mtx[1:6, 1:6]
+ftf.motif_ix@colData$name
+
+## Checking that motifs and annoations associated to each regions
+## have the same length
+#length(map.genByRegion) == length(motif_ix)
+
+neighbors.list$neighborGenes_1000
+motif_ix$'closest_genes' <- map.genByRegion
+```
+
+
+# Categorization of regions 
+
+The following vulcano plot shows the peak scores for each region pre- and post-treatment
+and in colors the categories to which we assigned each region.
+
+```{r, splitting_genes_by_category}
+peaks.df <- peaks.df %>%
+  mutate(region_reg_type=ifelse(`log2FC: Group HCV_pre vs HCV_post`> 0,
+                                'positive', 'negative')) %>%
+  mutate(region_deg=(as.numeric(`q-value: Group HCV_pre vs HCV_post`)) < 0.05 )
+is.na(peaks.df$region_deg) %>% sum
+peaks.df$'category' <- sapply(1:nrow(peaks.df), 
+                              function(i){
+                                if ( is.na( peaks.df$region_deg[i] ) ) {
+                                  return('NA')
+                                } else {
+                                  if ( peaks.df$region_deg[i] == FALSE ) {
+                                  return('Scarred')
+                                } 
+                                 
+                                if ( peaks.df$region_deg[i] == TRUE) {
+                                  if ( peaks.df$region_reg_type[i] == 'positive') {
+                                    return('Reversed')
+                                    } 
+                                  if ( peaks.df$region_reg_type[i] == 'negative') {
+                                    return('Gained')
+                                   } 
+                                  }
+                                }
+                                
 })
+
+print('')
+## Categorization of regions by the change in epigenetic landscape
+peaks.df %>%
+  ggplot(aes(x=`P1_HCV_pre`,
+             y=`P1_HCV_post`,
+             colour=category)) +
+  geom_point() +
+  labs(x='HCV - DAA Pre-treatment Peak Score',
+       y='HCV - DAA Post-treatment Peak Score') +
+  theme_classic()
+```
+
+
+
+```{r, saving_categories}
+write_tsv(
+  peaks.df, 
+  file = paste0(path2project, '/analysis/regions_categories_epigenetic_scar.tsv.gz')
+)
 ```
