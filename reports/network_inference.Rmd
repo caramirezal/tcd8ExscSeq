@@ -15,21 +15,29 @@ This report contain documentation of the analysis of CD8 T cells from chronic HC
 patients.
 
 
-```{r}
+```{r, setting, include=FALSE}
 library(rio)
 library(ggplot2)
 library(tidyverse)
-library(motifmatchr)
-library(TFBSTools)
+#library(motifmatchr)
+#library(TFBSTools)
 library(JASPAR2020)
 library(GenomicRanges)
-library(BSgenome)
+#library(BSgenome)
 library(ggVennDiagram)
 library(grid)
-library(Gviz)
-library(Homo.sapiens)
+#library(Gviz)
+#library(Homo.sapiens)
 library(rGREAT)
 library(UpSetR)
+library(ggrepel)
+library(Seurat)
+library(reshape2)
+library(ggpubr)
+library(igraph)
+library(ComplexHeatmap)
+library(viridis)
+#library(AUCell)
 
 ## Rmarkdown Settings
 knitr::opts_chunk$set(
@@ -59,9 +67,10 @@ peaks_url <- 'https://static-content.springer.com/esm/art%3A10.1038%2Fs41590-021
 download.file(peaks_url, '/media/ag-cherrmann/cramirez/tcd8ExscSeq/data/41590_2021_979_MOESM3_ESM.xlsx')
 peaks.df <- readxl::read_xlsx('/media/ag-cherrmann/cramirez/tcd8ExscSeq/data/41590_2021_979_MOESM3_ESM.xlsx', 
                               sheet = 'Supplementary Table 2')
-dim(peaks.df)
+#dim(peaks.df)
 head(peaks.df)
 ```
+
 
 # The epigenetic scar
 
@@ -106,13 +115,16 @@ epi.scar.vulcano.plot
 
 # Scanning motifs in CHaRs
 
+We used MotifMatchR to scan the motifs in open regions. Motifs used
+correspond to the JASPAR2020 database.
 
 
-```{r}
+```{r, scanning_motifs_motif_matchr, eval=FALSE}
 ## Constructing the set of PFmatrix containing all the motifs in jaspar2020
 opts <- list()
 opts[["all_versions"]] <- TRUE
-PFMatrixList <- getMatrixSet(JASPAR2020, opts)
+PFMatrixList <- getMatrixSet(JASPAR2020, 
+                             opts)
 
 ## Converting regions to GRanges
 peaks <- peaks.df
@@ -125,14 +137,17 @@ ranges <- makeGRangesFromDataFrame(peaks,
                                    end.field = 'End')
 
 
-motif_ix <- matchMotifs(PFMatrixList, ranges, genome = "hg19", out = 'scores') 
+motif_ix <- matchMotifs(PFMatrixList, 
+                        ranges, 
+                        genome = "hg19", 
+                        out = 'scores') 
 
-saveRDS(motif_ix, paste0(path2project,
-                         '/analysis/motifs_CHaRs_preVsPost_treatment.rds'),
-        compress = TRUE)
-saveRDS(ranges, paste0(path2project, 
-                       'analysis/ranges_CHaRs_preVsPost_treatment.rds'),
-        compress = TRUE)
+#saveRDS(motif_ix, paste0(path2project,
+#                         '/analysis/motifs_CHaRs_preVsPost_treatment.rds'),
+#        compress = TRUE)
+#saveRDS(ranges, paste0(path2project, 
+#                       'analysis/ranges_CHaRs_preVsPost_treatment.rds'),
+#        compress = TRUE)
 dim(motifScores(motif_ix))
 head(motifScores(motif_ix))
 ```
@@ -141,10 +156,10 @@ head(motifScores(motif_ix))
 
 The next track plot show an interval of 100 kb around the IFNG gene.
 
-```{r}
+```{r, char_plot, eval=FALSE}
 ranges <- readRDS(file = paste0(path2project,
                          '/analysis/ranges_CHaRs_preVsPost_treatment.rds'))
-motifs_ix <- readRDS(file = paste0(path2project,
+motif_ix <- readRDS(file = paste0(path2project,
                          '/analysis/motifs_CHaRs_preVsPost_treatment.rds'))
 from <- 68548548 - 100000 
 to <- 68553520 + 100000
@@ -155,27 +170,38 @@ atrack <- AnnotationTrack(ranges.12)
 gtrack <- GenomeAxisTrack()
 chr <- 'chr12'
 gen <- 'hg19'
-itrack <- IdeogramTrack(genome = gen, chromosome = chr)
+itrack <- IdeogramTrack(genome = gen, 
+                        chromosome = chr)
 
 
-knownGenes <- UcscTrack(genome = "hg19", chromosome = "chr12", 
-                        track = "knownGene", from = from, to = to,
+knownGenes <- UcscTrack(genome = "hg19", 
+                        chromosome = "chr12", 
+                        track = "knownGene", 
+                        from = from, to = to,
                         trackType = "GeneRegionTrack", 
-                        rstarts = "exonStarts", rends = "exonEnds", 
-                        gene = "name", symbol = "name", 
-                        transcript = "name", strand = "strand", 
-                        fill = "#8282d2", name = "UCSC Genes")
+                        rstarts = "exonStarts", 
+                        rends = "exonEnds", 
+                        gene = "name", 
+                        symbol = "name", 
+                        transcript = "name", 
+                        strand = "strand", 
+                        fill = "#8282d2", 
+                        name = "UCSC Genes")
 
 plotTracks(list(itrack, atrack, gtrack, knownGenes))
 ```
 
 # Annotating regions with genes around regions
 
+We annotate regions with the closest genes. We calculated the distances
+of the region to all the gRanges regions in the UCSC hg19 database of
+known genes. And then we kept just the genes with less than a 1 kb.
 
-The following upset plot show the set of genes mapped to the CHaRs in the ATAC-Seq data.
+We tested different distance windows (1, 3, 5, 10, and 50 kb).
+The following upset plot shows the set of genes mapped to the CHaRs in the ATAC-Seq data found using the different distance windows.
 
 
-```{r, manual_annotation}
+```{r, manual_annotation, eval=FALSE}
 ## Construction of the annotated reference
 txdb <- TxDb.Hsapiens.UCSC.hg19.knownGene::TxDb.Hsapiens.UCSC.hg19.knownGene
 broads <- GenomicFeatures::genes(txdb)
@@ -216,7 +242,7 @@ names(granges.genes) <- paste0('genes_around_', c(1, 3, 5, 10, 50), '_kb')
 ```
 
 
-```{r}
+```{r, eval=FALSE}
 upset(fromList(granges.genes), nsets = 20)
 ```
 
@@ -225,7 +251,7 @@ It can be observed that most of the mapped genes are located at less than 1 kb
 of distance to the corresponding associated peak.
 
 
-```{r, distances}
+```{r, distances, eval=FALSE}
 distances.filtered <- neighbors.list$neighborGenes_1000 %>% 
                              unlist() 
 sum(distances.filtered==0)
@@ -246,41 +272,33 @@ map.genByRegion <- sapply(neighbors.list$neighborGenes_1000,
           }
           return(res)
 }) 
-## Adding region mapping to found motifs in regions
-values(motif_ix) <- DataFrame(genes=map.genByRegion)
-## Saving information
-saveRDS(motif_ix, paste0(path2project,
-                         '/analysis/motifs_CHaRs_preVsPost_treatment.rds'),
-        compress = TRUE)
-#ngenes <- sapply(map.genByRegion, length) 
-#map.genByRegion[ngenes>1]
+
+
 
 ## Getting TFs mapped to regions
 tfs.bound <- character(length = nrow(motif_ix))
 mtx <- motifMatches(motif_ix)
 for (i in 1:nrow(motif_ix)){
   tfs.bound[i] <- paste(motif_ix@colData$name[mtx[i,]],
-                        sep = ';', collapse = ';')
+                        collapse = ';')
   cat('Region', i, 'has been processed\n')
 }
 head(tfs.bound)
 
-sapply(1:nrow(motif_ix), 
-       function(index){
-         motif_ix@colData$name[motifMatches(motif_ix)[index,]] %>%
-           paste(sep=';')
-       }) %>% head
-motifMatches(motif_ix)
-tfs.bound.mtx <- motif_scores(motif_ix) > 0
-tfs.bound.mtx[1:6, 1:6]
-ftf.motif_ix@colData$name
 
-## Checking that motifs and annoations associated to each regions
-## have the same length
-#length(map.genByRegion) == length(motif_ix)
+## Adding region mapping to found motifs in regions
+values(motif_ix) <- DataFrame(genes=map.genByRegion,
+                              TF=tfs.bound)
 
-neighbors.list$neighborGenes_1000
-motif_ix$'closest_genes' <- map.genByRegion
+saveRDS(motif_ix, paste0(path2project,
+                         '/analysis/motifs_CHaRs_preVsPost_treatment.rds'),
+        compress = TRUE)
+
+write_tsv(as.data.frame(motif_ix@rowRanges), 
+          file = paste0(path2project,
+                        '/analysis/CHaRs_annotated.tsv.gz' ))
+
+
 ```
 
 
@@ -323,16 +341,856 @@ peaks.df %>%
              y=`P1_HCV_post`,
              colour=category)) +
   geom_point() +
+  geom_abline(linetype='dashed', color='black') +
   labs(x='HCV - DAA Pre-treatment Peak Score',
-       y='HCV - DAA Post-treatment Peak Score') +
+       y='HCV - DAA Post-treatment Peak Score',
+       color='') +
   theme_classic()
+  
+```
+
+```{r, regions_tf_targets_interactions}
+interactions.df <- read_tsv(paste0(path2project,
+                        '/analysis/CHaRs_annotated.tsv.gz' ))
+#interactions.df <- as.data.frame(motif_ix@rowRanges)
+interactions.df
+```
+
+
+```{r, adding_categories_to_regions}
+## Checking order
+any(interactions.df$start != peaks.df$Start & interactions.df$end != peaks.df$End)
+interactions.df$'categories_postVsPreDAA' <- peaks.df$category
+```
+
+
+```{r, saving_categories, eval=FALSE}
+write_tsv(
+  peaks.df, 
+  file = paste0(path2project, '/analysis/regions_categories_epigenetic_scar.tsv.gz')
+)
+```
+
+
+# GRNBoost
+
+We inferred a regulatory network using GRNBoost. The result of this
+process is a list of interactions ranked by variable importance.
+
+We ran the pySCENIC pipeline which contains GRNBoost
+as the initial step, as show in the next chunk.
+
+
+```{r, pySCENIC, eval=FALSE}
+## Saving the matrix for Scenic
+seurat <- readRDS(path2seurat)
+mtx <- t(seurat@assays$SCT@scale.data)
+colnames(mtx) <- gsub('--.*', '', colnames(mtx))
+mtx <- mtx[, ! grepl('-|\\.', colnames(mtx))]
+dim(mtx)
+write.table(mtx, file = path2matrix, sep = '\t')
+
+## The next commands should be run in the command line
+## Please follow the instructions in the SCENIC pipeline here:
+## https://github.com/hdsu-bioquant/pySCENIC_pipeline
+## Modify the mtx variable in the config file to the path
+## to where the matrix was stored, in this case, mtx = input/matrix.thime.tsv
+## Then run
+# > snakemake --configfile configs/config_nina_reprocessed.yml --cores 20
+
+## Copy analysis to the project folder
+dir.create(path = paste0(path2project, '/analysis'))
+dir.create(path = paste0(path2project, '/analysis/scenic/'))
+dir.create(path = paste0(path2project, '/analysis/scenic/daa_treatment'))
+
+scenic.output <- list.files(paste0(path2scenic, '/output'), full.names = T)
+scenic.output <- grep('sv', scenic.output, value = TRUE)
+lapply(scenic.output,
+       function(file_name){
+         file.copy(from = file_name,
+                   to =  paste0(path2project, '/analysis/scenic/daa_treatment'))
+       })
+list.files(paste0(path2project, '/analysis/scenic/daa_treatment'))
+
+```
+
+The following table shows the output of GRNBoost.
+
+```{r, grn_boost}
+grnboost <- read.table(paste0(path2project,
+                              '/analysis/scenic/daa_treatment/adj.tsv'),
+                       header = TRUE)
+head(grnboost)
+dim(grnboost)
+
+  ## Number of ranked interactions per target
+n_int <- 50
+
+gboost.list <- grnboost %>% split.data.frame(f=grnboost$target)
+gboost.list <- lapply(gboost.list, 
+                      function(df) arrange(df, desc(importance)))
+gboost.list <- lapply(gboost.list, 
+                      function(df) head(df, n=n_int))
+gboost.df <- do.call(rbind, gboost.list)
+head(gboost.df)
+dim(gboost.df)
+```
+
+# GRNBoost example
+
+The next joystick plot shows the top 50 ranked TFs important to predict Tcf7.
+
+
+```{r}
+print('')
+gboost.df %>%
+  dplyr::filter(target=='TCF7') %>%
+  mutate(rank=1:n()) %>%
+  mutate(highlight=ifelse(rank<15, TRUE, FALSE)) %>%
+  mutate(gene_label=ifelse(highlight==TRUE, TF, '')) %>%
+  ggplot(aes(x=rank, y=importance, 
+             label=gene_label,
+             colour=highlight)) +
+       geom_point() +
+       geom_label_repel(max.overlaps = Inf) +
+       scale_color_manual(values=c('black', 'red')) +
+       theme_bw() +
+       theme(legend.position = 'None')
+       
+```
+
+
+# Getting TF-target interactions from regions
+
+From the annotated regions using the previous methodology
+we created a table of TF-targets interactions.
+
+```{r, prunning_interactions}
+## filtering regions that does not appears in the
+## GRNBoost analysis
+interactions.simp.df <- filter(interactions.df,
+                               genes %in% gboost.df$target) 
+
+## Extracting interactions
+process_regions <- function(ints.df){
+  target.tf.list <- lapply(
+    1:nrow(ints.df), function(i) {
+      tfs <- str_split(ints.df[i, 'TF'], 
+                       pattern = ';')
+      df <- data.frame(gene=ints.df$genes[i],
+                       TF=tfs)
+      colnames(df) <- c('gene', 'TF')
+      df <- mutate(df, TF = toupper(TF))
+      return(df)
+    })
+  TF_target.df <- do.call(rbind, target.tf.list)
+  TF_target.df <- TF_target.df[! duplicated(TF_target.df),]
+  return(TF_target.df)
+}
+
+TF_target.df.list <- list(
+  gained=process_regions(
+          filter(interactions.simp.df,
+                 categories_postVsPreDAA %in% c('Gained'))),
+  reversed=process_regions(
+          filter(interactions.simp.df,
+          categories_postVsPreDAA %in% c('Reversed'))),
+  scarred=process_regions(
+          filter(interactions.simp.df,
+          categories_postVsPreDAA %in% c('Scarred')))
+)
+lapply(TF_target.df.list, head)
+lapply(TF_target.df.list, dim)
+dim(grnboost)
+head(gboost.df)
+
+## Intersecting GRN boost and regions
+gboost.df <- dplyr::rename(gboost.df, gene=target)
+granet.interactions.df.list <- lapply(
+  TF_target.df.list, function(df){
+    merged.df <- merge(df, gboost.df)
+    merged.df <- dplyr::select(merged.df, gene, TF)
+    merged.df <- merged.df[!duplicated(merged.df),]
+    merged.df
+})
+#lapply(granet.interactions.df.list, function(df) filter(df, TF=='TCF7'))
+#lapply(granet.interactions.df.list, dim)
+
+## Getting list of interactions
+interactions.list <- lapply(granet.interactions.df.list, 
+                       function(df) {
+                         df.processed <- mutate(df, interaction=paste0(TF, '--', gene))
+                         interactions <- pull(df.processed, interaction)
+                         interactions <- unique(interactions)
+                         return(interactions)
+})
+lapply(interactions.list, length)
+
+## Getting list of TFs
+tfs.list <- lapply(granet.interactions.df.list, 
+                       function(df) {
+                         tfs <- pull(df, TF) %>% unique()
+                         return(tfs)
+})
+lapply(tfs.list, length)
+
+
+print('')
+interactions_Venn <- ggVennDiagram(interactions.list) +
+   theme(legend.position = 'none') +
+   viridis::scale_fill_viridis() +
+   labs(title='Number of interactions')
+
+regulons_Venn <- ggVennDiagram(tfs.list) +
+   theme(legend.position = 'none') +
+   viridis::scale_fill_viridis() +
+   labs(title = 'Regulons')
+
+gridExtra::grid.arrange(
+  interactions_Venn, regulons_Venn,
+  ncol=2
+)
+
+```
+
+
+```{r}
+tfs.human <- readLines('https://raw.githubusercontent.com/aertslab/pySCENIC/master/resources/hs_hgnc_curated_tfs.txt')
+interactions.TF_Only.list <- lapply(
+  granet.interactions.df.list, 
+  function(ints.df){
+    df <- dplyr::filter(ints.df, TF %in% tfs.human)
+    df <- dplyr::filter(df, gene %in% tfs.human)
+    df <- unique(df)
+    return(df)
+})
+lapply(interactions.TF_Only.list, dim)
+
+dir.create(paste0(path2project, '/analysis/network'))
+lapply(names(interactions.TF_Only.list),
+       function(name) {
+         write.table(interactions.TF_Only.list[name][[1]],
+                     file = paste0(path2project, '/analysis/network/', name, '.tsv'),
+                     sep = '\t', 
+                     quote = FALSE, 
+                     row.names = FALSE)
+})
+
+interactions.TF_Only.list
+#saveRDS(interactions.TF_Only.list, 
+#        file = paste0(path2project, 'analysis/interactions.TF_Only.list'))
+```
+
+```{r, eval=FALSE}
+peaks.annotated <- readRDS(
+  file = paste0(path2project,
+                '/analysis/motifs_CHaRs_annotated.rds'))
+
+
+tfs.human <- unique(tfs.human)
+names(tfs.human) <- tfs.human
+
+## Frequency of appearance of motifs in all categories
+tfs.freq.overall <- sapply(tfs.human, function(tf) sum(grepl(tf, peaks.annotated$TF)))
+## Frequency of appearance of motifs in gained regions
+tfs.freq.gained <- sapply(tfs.human, 
+                          function(tf) sum(grepl(tf, 
+                                                 subset(peaks.annotated,
+                                                      categories_postVsPreDAA=="Gained")$TF)))
+## Frequency of appearance of motifs in reversed regions
+tfs.freq.reversed <- sapply(tfs.human, 
+                          function(tf) sum(grepl(tf, 
+                                                 subset(peaks.annotated,
+                                                        
+                                                      categories_postVsPreDAA=="Reversed")$TF)))
+## Frequency of appearance of motifs in scarred regions
+tfs.freq.scarred <- sapply(tfs.human, 
+                          function(tf) sum(grepl(tf, 
+                                                 subset(peaks.annotated,
+                                                      categories_postVsPreDAA=="Scarred")$TF)))
+
+
+## Calculation of the fractions of motif appearance across categories
+## Let P_cat = Frequency_cat / Total_cat
+## We define the ratio Q_gained = P_gained / P_overall
+P_overall <- tfs.freq.overall / nrow(peaks.annotated)
+P_gained <- tfs.freq.gained / nrow(subset(peaks.annotated, 
+                                          categories_postVsPreDAA=="Gained"))
+P_reversed <- tfs.freq.reversed / nrow(subset(peaks.annotated,
+                                            categories_postVsPreDAA=="Reversed"))
+P_scarred <- tfs.freq.scarred / nrow(subset(peaks.annotated,
+                                           categories_postVsPreDAA=="Scarred"))
+Q_gained <- P_gained / P_overall
+Q_reversed <- P_reversed / P_overall 
+Q_Scarred <- P_scarred / P_overall
+
+res.list <- list(Q_gained=Q_gained,
+                 Q_reversed=Q_reversed,
+                 Q_Scarred=Q_Scarred)
+lapply(res.list, summary)
+
+saveRDS(res.list, '../data/motif_ratio_by_category.rds', compress = TRUE)
+```
+
+```{r, fig.width=15, fig.height=6}
+res.list <- readRDS('../data/motif_ratio_by_category.rds')
+ratios_categories.plots.list <- lapply(names(res.list), 
+       function(name){
+         q_category <- res.list[name][[1]][!is.na(res.list[name][[1]])] %>% sort(decreasing = TRUE)
+         tfs.df <- data.frame(tf=names(q_category),
+                              q_category=q_category)
+         tfs.df <- mutate(tfs.df, rank=1:n())
+         tfs.df <- mutate(tfs.df, rescaled_scored=(q_category / max(q_category)))
+         tfs.df <- mutate(tfs.df, gene_label=ifelse(rank<30, tf, ''))
+         tfs.df %>%
+           ggplot(aes(x=rank, y=log(q_category),
+                      label=gene_label)) +
+                geom_point() +
+                theme_bw() +
+                geom_label_repel(max.overlaps = Inf,
+                     force = 40,
+                     colour='Red') +
+                xlim(-50, 600) +
+                ylim(-0.3, 1) +
+                labs(x='Rank', y='Scaled Quotient Motif by Category') +
+                ggtitle(name)
+})
+gridExtra::grid.arrange(grobs=ratios_categories.plots.list, ncol=3)
+```
+
+## Heatmap Subpopulations Vs Gained/Reversed/Scarred
+
+
+```{r, loading_maike_data}
+seurat <- readRDS(paste0(path2project, 'data/maike2020/hofmann_hcv_seu.rds'))
+seurat <- subset(seurat, nina_annotations %in% c('mem', 'exh', 'trans'))
+
+seurat <- CreateSeuratObject(counts = seurat@assays$RNA@counts,
+                             project = 'CD8 T cells', 
+                             assay = 'RNA', 
+                             min.cells = 1, 
+                             min.features = 1, 
+                             meta.data = seurat@meta.data)
+seurat <- SCTransform(seurat)
+
+seurat <- FindVariableFeatures(seurat)
+seurat <- RunPCA(seurat, npcs = 20)
+seurat <- RunUMAP(seurat, dims = 1:20)
+
+```
+
+```{r, heatmap_categories_x_cell_types}
+peaks.annotated <- readRDS(
+  file = paste0(path2project,
+                '/analysis/motifs_CHaRs_annotated.rds'))
+categories.df <- filter(peaks.annotated, genes != '')
+genesByCategory <- split(categories.df$genes, categories.df$categories_postVsPreDAA)
+genesByCategory <- genesByCategory[c('Gained', 'Reversed', 'Scarred')]
+genesByCategory <- lapply(genesByCategory, unique)
+genesByCategory <- lapply(genesByCategory,
+                          function(x) intersect(x, rownames(seurat)))
+genesByCategory$'Random genes' <- sample(rownames(seurat), size = 735)
+
+
+mtxByCategory <- lapply(genesByCategory,
+                        function(genes) FetchData(seurat,
+                                                  vars = c('nina_annotations', 
+                                                           genes)))
+## Mean values
+mtxByCategory <- lapply(mtxByCategory, function(mtx){
+  df <- group_by(mtx, nina_annotations)
+  summ.df <- summarise_all(df, mean)
+  summ.df
+})
+## Plotting
+boxplots.list <- lapply(names(mtxByCategory), function(category){
+  mtxByCategory[category][[1]] %>%
+    melt %>%
+    ggplot(aes(x=nina_annotations, y=log(value))) +
+    geom_jitter() +
+    geom_boxplot() +
+    ggtitle(category) +
+    stat_compare_means(label.y = 1.5, label = "p.signif",
+                       colour='red', size=5) +
+    theme_bw() +
+    theme(axis.text.x = element_text(hjust = 1, angle=45)) +
+    labs(x='', y='Log(mean(gene expression))')
+})
+boxplot<- gridExtra::grid.arrange(grobs=boxplots.list, ncol=4)
+plot(boxplot)
+
+
+heatmap.mtx <- lapply(mtxByCategory,
+       function(mtx){
+         df <- dplyr::select(mtx, -nina_annotations)
+         mean.vals <- apply(df, 1, mean)
+         mean.vals
+       }) %>%
+       unlist() %>%
+       matrix(ncol=3, byrow = TRUE)
+rownames(heatmap.mtx) <- names(mtxByCategory)
+colnames(heatmap.mtx) <- c('Mem', 'Trans', 'Exh')
+
+heatmap.ggplot <- heatmap.mtx %>%
+  t() %>%
+  scale(center = TRUE) %>%
+  t() %>%
+  as.data.frame() %>%
+  add_rownames(var = 'category') %>%
+  melt() %>%
+  ggplot(aes(x=variable,
+             y=factor(category,
+                      levels=c('Random genes',
+                               'Scarred',
+                               'Gained',
+                               'Reversed')),
+             fill=value)) +
+         geom_tile(width=1,
+                   height=1,
+                   size=1,
+                   colour='white') +
+         scale_fill_gradient2(low = 'chartreuse4',
+                              mid = 'Yellow',
+                              high = 'Red') +
+  coord_equal() +
+  theme(panel.grid = element_blank(),
+        panel.background = element_blank(),
+        axis.ticks = element_blank()) +
+  labs(x='', y='')
+print('')
+heatmap.ggplot
+```
+
+```{r, heatmap_genes_vs_cells}
+head(categories.df)
+
+## Filtering genes
+categories.df <- filter(categories.df, categories_postVsPreDAA != 'NA')
+
+## Trying only DEGs
+Idents(seurat) <- seurat$nina_annotations
+degs <- FindAllMarkers(seurat, 
+                       logfc.threshold = 0.001, 
+                       min.pct = 0.001, min.diff.pct = 0.001)
+degs.significant <- filter(degs, p_val < 0.05)
+
+dim(degs.significant)
+
+## filtering genes by DEGs
+genes.chars <- intersect(rownames(seurat), categories.df$genes) 
+genes.chars <- genes.chars[!duplicated(genes.chars)]
+genes.anns <- dplyr::select(categories.df, genes, categories_postVsPreDAA) %>%
+                      filter(genes %in% genes.chars)
+genes.split <- split(genes.anns$categories_postVsPreDAA, genes.anns$genes)
+genes.unambigous.cat <- sapply(genes.split, function(x) length(unique(x)) < 2 )
+genes.unambigous.cat <- names(genes.unambigous.cat)[genes.unambigous.cat]
+genes.chars <- genes.chars[genes.chars %in% genes.unambigous.cat]
+length(genes.chars)
+
+
+
+
+
+
+## Removing genes with ambiguous categories
+
+
+intersect(degs.significant, genes.chars) ## no intersection
+
+
+
+## genes annotations
+genes.anns <- genes.anns[!duplicated(genes.anns), ]
+## Extract matrix from seurat 
+mtx <- FetchData(seurat, 
+                 vars = intersect(rownames(seurat), 
+                                  genes.chars))
+dim(mtx)
+
+## cell annotations
+mtx.ann <- seurat@meta.data
+dim(mtx.ann)
+
+
+
+row.anns <- rowAnnotation(cell_type=mtx.ann$nina_annotations)
+#Heatmap(
+#  mtx, show_row_names = FALSE, 
+#  show_column_names = FALSE,
+#  row_split = mtx.ann$nina_annotations,
+#  column_split = genes.anns$categories_postVsPreDAA
+#)
+```
+
+
+```{r, network_visualization, fig.width=15, fig.height=12}
+interactions.TF_Only.list <- read_rds(file = paste0(path2project,
+                                                    'analysis/interactions.TF_Only.list'))
+
+interactions.TF_Only.list <- lapply(names(interactions.TF_Only.list), 
+                                 function(name) mutate(interactions.TF_Only.list[name][[1]], 
+                                                       category=name))
+interactions.TF_Only.list <- lapply(interactions.TF_Only.list, 
+                                    function(df) mutate(df, interaction=paste0(gene,'--', TF)))
+interactions.tf.df <- do.call(rbind, interactions.TF_Only.list)
+interactions.tf.df <- mutate(interactions.tf.df, 
+                             color=plyr::mapvalues(interactions.tf.df$category,
+                                                   from = c('gained', 'reversed', 'scarred'),
+                                                   to = c('green', 'red', 'gray85')))
+table(interactions.tf.df$category)
+
+## interactions graph
+edges.df <- mutate(interactions.tf.df, from=TF, to=gene)
+vertices.df <- data.frame(genes=unique(c(interactions.tf.df$gene, interactions.tf.df$TF)))
+vertices.df
+
+## Importing to igraph
+g <- graph_from_data_frame(d = edges.df, directed = TRUE, vertices = vertices.df)
+V(g)$degree <- degree(g)
+
+## Select vertices with highest degrees
+v.degree <- degree(g)
+v.sorted <- sort(v.degree, decreasing = TRUE) %>% head(30) %>% names()
+
+g.subset <- induced_subgraph(g, v = v.sorted)
+l <- layout_with_fr(g.subset)
+
+dir.create(paste0(path2project, 'figures'))
+
+pdf(paste0(path2project, '/figures/integrated_network.pdf'),
+     width=15,
+     height=12)
+plot(g.subset, 
+     layout=l,
+     edge.arrow.size=0.1,
+     vertex.size=(V(g.subset)$degree/max(V(g.subset)$degree)*27),
+     vertex.label.cex=(V(g.subset)$degree/max(V(g.subset)$degree)*2),
+     edge.width=0.5,
+     vertex.frame.color='white')
+dev.off()
+
+plot(g.subset, 
+     layout=l,
+     edge.arrow.size=0.1,
+     vertex.size=(V(g.subset)$degree/max(V(g.subset)$degree)*27),
+     vertex.label.cex=(V(g.subset)$degree/max(V(g.subset)$degree)*2),
+     edge.width=0.5,
+     vertex.frame.color='white')
+```
+
+```{r, fig.width=12, fig.height=8}
+names(interactions.TF_Only.list) <- c('Gained', 'Reversed', 'Scarred')
+top.tfs.plots <- lapply(names(interactions.TF_Only.list), 
+       function(name){
+         df <- interactions.TF_Only.list[name][[1]]
+         df %>% dplyr::select(TF, category) %>% table() %>%
+           as.data.frame() %>%
+           arrange(desc(Freq)) %>%
+           head(20) %>%
+           mutate(TF=factor(TF, rev(TF))) %>%
+           ggplot(aes(x=TF, y=Freq)) +
+                geom_bar(stat = 'identity',
+                         fill='steelblue') +
+                coord_flip() +
+                labs(x='', y='Outgoing edges') +
+                theme_bw() +
+                ggtitle(name)
+       })
+gridExtra::grid.arrange(grobs=top.tfs.plots, ncol=3)
+```
+
+
+```{r, scores_heatmap, fig.width=4, fig.height=4.5}
+res.list.filtered <- lapply(res.list, 
+                            function(x) {
+                              y <- x
+                              y[is.na(y)] <- 0
+                              return(y)
+})
+
+lapply(res.list, length)
+q.df <- matrix(data = unlist(res.list.filtered), 
+               ncol = length(res.list$Q_gained), 
+               nrow = length(res.list),
+               byrow = TRUE)
+q.df[, 1:3]
+colnames(q.df) <- names(res.list$Q_gained)
+rownames(q.df) <- c('Gained', 'Reversed', 'Reversed')
+
+scores.mtx <- t(q.df)
+scores.mtx <- scores.mtx[apply(scores.mtx, 1, function(x) sum(x) > 0),]
+scores.mtx <- log(scores.mtx)
+Heatmap(scores.mtx, 
+        show_row_names = FALSE, 
+        row_dend_reorder = FALSE, 
+        show_row_dend = FALSE,
+        show_column_dend = FALSE,
+        col = viridis(n=100, option = 'magma'))
+
 ```
 
 
 
-```{r, saving_categories}
-write_tsv(
-  peaks.df, 
-  file = paste0(path2project, '/analysis/regions_categories_epigenetic_scar.tsv.gz')
+```{r}
+library(AUCell)
+lapply(granet.interactions.df.list, head)
+
+## Extracting all regulons
+regulons <- lapply(granet.interactions.df.list, 
+                   function(df) 
+                     split(df$gene, f = df$TF)) %>% unlist(recursive = FALSE)
+
+lapply(regulons, length)
+
+## Filtering regulons
+
+#regulons <- regulons[sapply(regulons, function(reg) length(reg) > 5)]
+  
+## Getting cells with annotations
+## Loading seurat object with integrated data Miller-Hoffmann
+seurat.cell_types  <- readRDS(paste0(path2project,'data/maike2020/hofmann_hcv_seu.rds'))
+seurat.cell_types <- subset(seurat.cell_types, nina_annotations %in% c('mem', 'trans', 'exh'))
+## Visualization of cells
+DimPlot(seurat.cell_types,
+        group.by = 'nina_annotations')
+mtx.cell_types <- seurat.cell_types@assays$integrated@scale.data
+
+genes <- unique(rownames(mtx.cell_types))
+
+cells_rankings <- AUCell_buildRankings(mtx.cell_types)
+
+#geneSets <- unlist(regulons, recursive = FALSE)
+cells_AUC <- AUCell_calcAUC(geneSets, cells_rankings, 
+                            aucMaxRank=nrow(cells_rankings)*0.005)
+auc.mtx <- getAUC(cells_AUC)
+
+#col_anns <- HeatmapAnnotation(cell_type = seurat.cell_types$nina_annotations)
+#row_anns <- rowAnnotation(category = gsub('\\..*', '', rownames(auc.mtx)))
+
+#Heatmap(auc.mtx, 
+#        top_annotation = col_anns, 
+#        left_annotation = row_anns,
+#        column_split = seurat.cell_types$nina_annotations,
+#        #row_split = gsub('\\..*', '', rownames(auc.mtx)),
+#        show_row_names = FALSE,
+#        show_column_names = FALSE)
+
+#DimPlot(subset(seurat.cell_types, nina_annotations %in% c('mem', 'trans', 'exh')),
+#        group.by = 'nina_annotations')
+
+## Scoring cells
+#seurat.cell_types$nina_annotations %>% unique()
+
+
+## Selection of the TFs using a random forest predicting
+## memory vs terminally phenotypes
+#library(randomForest)
+
+#auc.df <- t(auc.mtx) %>% as.data.frame()
+#class(auc.df)
+#auc.df <- mutate(auc.df, cell_type = seurat.cell_types$nina_annotations)
+  
+#n <- 4
+#rforest <- randomForest(as.factor(cell_type)~., 
+#                        data = auc.df) 
+#varImpPlot(rforest)
+#tfs <- rforest$importance %>% 
+#               as.data.frame() %>%
+#                arrange(desc(MeanDecreaseGini)) %>%
+#                rownames()
+#top_n_tfs <- tfs[1:4]
+#top_n_tfs
+
+#seurat.cell_types <- AddMetaData(seurat.cell_types, auc.df)
+
+#FeaturePlot(subset(seurat.cell_types, nina_annotations %in% c('exh', 'mem')), 
+#            features = 'scarred.PRDM1', pt.size = 2.5) +
+#      scale_color_viridis()
+
+#seurat.cell_types@meta.data %>%
+#  ggplot(aes(x=nina_annotations,
+#             y=log(`scarred.PRDM1`),
+#             fill=nina_annotations)) +
+#      geom_boxplot(draw_quantiles = 0.5, width = 0.5) +
+#      theme_bw() +
+#      labs(x='', y='Log(Signature AUC Score)', title = 'scarred PRDM1') +
+#      theme(legend.position = 'none',
+#            axis.text.x = element_text(angle=45, hjust=1)) +
+#      stat_compare_means(aes(group = nina_annotations), 
+#                         label = "p.signif", 
+#                         label.y = 0.1,
+#                         label.x = 2) 
+
+#df.res <- seurat.cell_types@meta.data %>%
+#  dplyr::select(nina_annotations, matches('gained|reversed|scarred')) %>%
+#  group_by(nina_annotations) %>%
+#  summarise_all(mean)
+
+#df.res.t <- dplyr::select(df.res, -nina_annotations) %>% t
+#colnames(df.res.t) <- df.res$nina_annotations
+#df.res.t <- as.data.frame(df.res.t)
+#df.res.t %>%
+#  mutate(category=gsub('\\..*', '', rownames(df.res.t))) %>%
+#  ggplot(aes(x=mem, y=exh, color=category)) +
+#       geom_point() +
+#       geom_abline(slope = 1)
+
+
+tfa <- CreateAssayObject(data = auc.mtx, min.cells = 0, min.features = 0)
+seurat.cell_types[["regulon_"]] <- tfa
+Idents(seurat.cell_types) <- seurat.cell_types$nina_annotations
+diff.tfa <- FindMarkers(seurat.cell_types, 
+               assay = 'regulon_', 
+               group.by = 'nina_annotations', 
+               logfc.threshold = 0, 
+               min.pct = 0, 
+               ident.1 = 'mem', ident.2 = 'exh')
+
+
+library(ggrepel)
+
+print('')
+diff.tfa %>%
+  mutate(category=gsub('\\..*', '', rownames(diff.tfa))) %>%
+  mutate(tf=gsub('.*\\.', '', rownames(diff.tfa))) %>%
+  arrange(desc(abs(avg_log2FC))) %>%
+  mutate(rank=1:n()) %>%
+  mutate(tf_label=ifelse(rank<20, tf, '')) %>%
+  ggplot(aes(x=avg_log2FC, 
+             y=-log10(p_val),
+             colour=category,
+             label=tf_label)) +
+      geom_point(size=3) +
+      geom_point(shape=1, size=3, color='black') +
+      geom_text_repel() +
+      geom_hline(yintercept = -log10(0.05), 
+                 linetype = 'dashed') +
+      theme_bw() +
+      labs(title = 'Differential Regulon Activity',
+           subtitle = 'Mem Vs Exh',
+           color='',
+           x='Mean Log2(FC)',
+           y='-Log10(p-Value)')
+
+
+
+#FeaturePlot(subset(seurat.cell_types, nina_annotations %in% c('exh', 'mem')), 
+#            features = 'reversed.EOMES', pt.size = 3) +
+#         scale_color_viridis()
+#DimPlot(subset(seurat.cell_types, nina_annotations %in% c('exh', 'mem')),
+#        group.by = 'nina_annotations')
+```
+
+
+## Variability in cured vs chronic samples
+
+```{r, fig.width=8}
+path2seurat <- '/media/ag-cherrmann/cramirez/tcd8ExscSeq/data/Thimme_reprocessed/seurat.thimme.rds'
+seurat <- readRDS(path2seurat)
+seurat$condition %>% unique()
+DefaultAssay(seurat) <- 'RNA'
+pca <- FetchData(seurat, vars = c('condition', 
+                                  colnames(seurat@reductions$pca)), slot='count')
+
+pca[,1:30] %>%
+  group_by(condition) %>%
+  summarise_all(var) %>%
+  melt() %>%
+  ggplot(aes(x=variable, y=value, colour=condition)) +
+      geom_point() +
+      theme_bw() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+      labs(x='PC', y='Variance')
+```
+
+
+
+```{r, node_importance}
+
+# Extracting the vertices
+GraphVertices <- V(My_graph)        
+
+# Calculation of Hubness score
+Hubness.score <- hubness.score(graph = g,     
+                                   vertices = GraphVertices, 
+                                   directed = FALSE, mode = "all",
+                                   loops = TRUE, scaled = TRUE)
+
+
+# Visualizing the graph based on IVI values
+graph.vis <- cent_network.vis(graph = g,
+                                     cent.metric = Hubness.score,
+                                     directed = TRUE,
+                                     plot.title = "TF Interactions Network",
+                                     legend.title = "Hubness score", label.color = 'red')
+
+print('')
+graph.vis
+```
+
+
+```{r}
+bach2.regs <- lapply(regulons, function(x) x$'BACH2')
+bach2.regs.df.list <- lapply(names(bach2.regs), 
+       function(name){
+         df <- data.frame(TF='BACH2', category=name, target=bach2.regs[name][[1]])
+         df }) 
+bach2.regs.df <- do.call(rbind, bach2.regs.df.list) 
+bach2.regs.df
+
+write_csv(bach2.regs.df, file = paste0(path2project, '/analysis/bach2_rewiring.csv'))
+```
+
+
+```{r}
+## Trying only DEGs
+Idents(seurat) <- seurat$nina_annotations
+degs <- FindAllMarkers(seurat, 
+                       logfc.threshold = 0.001, 
+                       min.pct = 0.001, min.diff.pct = 0.001)
+degs.significant <- filter(degs, p_val < 0.05)
+
+dim(degs.significant)
+
+
+
+
+genes.anns <- dplyr::select(categories.df, genes, categories_postVsPreDAA) %>%
+                      filter(genes %in% genes.chars)
+
+
+## Removing genes with ambiguous categories
+genes.split <- split(genes.anns$categories_postVsPreDAA, genes.anns$genes)
+genes.unambigous.cat <- sapply(genes.split, function(x) length(unique(x)) < 2 )
+genes.unambigous.cat <- names(genes.unambigous.cat)[genes.unambigous.cat]
+genes.chars <- genes.chars[genes.chars %in% genes.unambigous.cat]
+length(genes.chars)
+
+## filtering genes by DEGs
+genes.chars <- intersect(rownames(seurat), categories.df$genes) 
+genes.chars <- genes.chars[!duplicated(genes.chars)]
+intersect(degs.significant, genes.chars) ## no intersection
+
+
+## genes annotations
+genes.anns <- genes.anns[!duplicated(genes.anns), ]
+## Extract matrix from seurat 
+mtx <- FetchData(seurat, 
+                 vars = intersect(rownames(seurat), 
+                                  genes.chars))
+dim(mtx)
+
+## cell annotations
+mtx.ann <- seurat@meta.data
+dim(mtx.ann)
+
+
+
+row.anns <- rowAnnotation(cell_type=mtx.ann$nina_annotations)
+Heatmap(
+  mtx, show_row_names = FALSE, 
+  show_column_names = FALSE,
+  row_split = mtx.ann$nina_annotations,
+  column_split = genes.anns$categories_postVsPreDAA
 )
 ```
