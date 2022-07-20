@@ -1,0 +1,199 @@
+---
+title: "Analysis of the regulons rewiring after treatment"
+author: "Health Data Unit"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    code_folding: hide
+  pdf_document: default
+---
+
+
+Analysis of the rewiring of regulons inferred based in scRNA-Seq conexpression and
+chromatin open regions from bulk ATAC Seq.
+
+
+```{r, setup, include=FALSE}
+library(igraph)
+library(tidyverse)
+library(ggplot2)
+library(ggrepel)
+library(ggVennDiagram)
+```
+
+
+## Loading regulons
+
+The inference of the regulons is implemented in the reports/network_inference.Rmd file.
+
+
+```{r, calculation_of_distances}
+granet.interactions.df.list <- readRDS(
+        '/media/ag-cherrmann/cramirez/tcd8ExscSeq/analysis/regulons/granet_interactions.rds'
+)
+
+## Intersection of Tfs across categories
+reg.tfs <- lapply(granet.interactions.df.list, function(df) unique(df$TF))
+shared.tfs <- unique(Reduce(intersect, reg.tfs)) %>% sort()
+## Union of all genes 
+reg.targets <- lapply(granet.interactions.df.list, function(df) unique(df$gene))
+targets <- unique(unlist(reg.targets)) %>% sort()
+
+## create a matrix of genes (Tfs) x genes (targets) per category
+## 1 if there is a interaction otherwise 0
+adj.mat <- matrix(0, 
+                  nrow = length(shared.tfs), 
+                  ncol = length(targets))
+rownames(adj.mat) <- shared.tfs
+colnames(adj.mat) <- targets
+adj.mat.list <- list(adj.mat, adj.mat, adj.mat)
+names(adj.mat.list) <- names(granet.interactions.df.list)
+names(adj.mat.list)
+
+## calculate the sum(abs(x, y)) where x and y are rows from the previous matrix
+## in different categories
+for ( cat in names(adj.mat.list) ){
+        df <- filter(granet.interactions.df.list[cat][[1]], TF %in% shared.tfs)
+        df <- filter(df, gene %in% targets)
+        
+        for (i in 1:nrow(df)){
+                adj.mat.list[cat][[1]][df$TF[i], df$gene[i] ] <- 1
+        }
+}
+
+dif.gainRev <- adj.mat.list$gained - adj.mat.list$reversed
+ranking <- apply(dif.gainRev, 1, function(x) sum(abs(x))) %>% sort(decreasing = TRUE)
+ranking.df <- data.frame(tf=names(ranking),
+                         distance=ranking)
+```
+
+
+
+```{r, vis}
+pdf('/media/ag-cherrmann/cramirez/tcd8ExscSeq/figures/rewiring_ranking.pdf',
+    width = 5, height =5)
+ranking.df %>%
+        mutate(rank=1:nrow(ranking.df)) %>%
+        mutate(gene_label=ifelse(rank<10 | tf %in% c('BACH2'), tf, '')) %>%
+        ggplot(aes(x=rank, y=distance,
+                   label=gene_label)) +
+                geom_point(size=2,
+                           colour='steelblue') +
+                geom_text_repel(force = 3) +
+                theme_classic() +
+                labs(x='Rank', y='Regulon distance (Gained Vs Reversed)')
+dev.off()
+```
+
+
+```{r, creating_igraph_object}
+stat1.gained <- filter(granet.interactions.df.list$gained, TF=='STAT1')
+stat1.gained$category <- 'gained'
+stat1.reversed <- filter(granet.interactions.df.list$reversed, TF=='STAT1')
+stat1.reversed$category <- 'reversed'
+stat1.reg <- rbind(stat1.gained, stat1.reversed)
+
+nodes.df <- data.frame(gene=unique(c('STAT1', stat1.reg$gene)))
+edges.df <- data.frame(from=stat1.reg$TF, to=stat1.reg$gene, category=stat1.reg$category)
+g <- graph_from_data_frame(edges.df, directed = TRUE, vertices = nodes.df)
+```
+
+# STAT1 example
+
+```{r, fig.height=10, fig.width=10}
+selected.genes <- c('FOXP1', 'IRS2', 'PRDM1',
+                    'TCF7', 'TNFRSF19', 'GZMA',
+                    'HAVCR2')
+labels <- sapply(V(g)$name, function(x){ ifelse(x %in% selected.genes, x, '') })
+
+colors <- plyr::mapvalues(
+        E(g)$category,
+        from = unique(E(g)$category),
+        to = c('salmon', 'green')
+) 
+
+l = layout_nicely(g)
+
+pdf('/media/ag-cherrmann/cramirez/tcd8ExscSeq/figures/stat1_rewiring.pdf')
+plot(g,
+     vertex.size=1.5,
+     vertex.label.dist=1,
+     vertex.label.color='black',
+     vertex.label.cex=0.5,
+     
+     edge.arrow.size=0.5,
+     edge.curved=.1,
+     edge.color=colors,
+     
+     layout=l)
+dev.off()
+```
+
+# Ratio of regulon sizes
+
+```{r}
+interactions.list <- lapply(names(granet.interactions.df.list), 
+                            function(name)
+                            mutate(granet.interactions.df.list[name][[1]], category=name))
+interactions.df <- do.call(rbind, interactions.list)
+
+freq.df <- interactions.df %>%
+        select(TF, category) %>%
+        table() 
+top.50 <- freq.df %>% 
+        apply(1, sum) %>%
+        sort(decreasing = TRUE) %>%
+        head(50) %>%
+        names()
+
+ratios <- freq.df  %>%
+        as.matrix() %>%
+        apply(1, function(x) x/sum(x)) %>%
+        as.data.frame() %>%
+        t() %>%
+        as.data.frame()
+
+order.regs <- arrange(ratios, desc(scarred)) %>%
+                rownames()
+
+
+pdf('/media/ag-cherrmann/cramirez/tcd8ExscSeq/figures/ratio_interactions_by_category.pdf',
+    width = 5, height = 7)
+freq.df %>%
+        as.data.frame() %>%
+        filter(TF %in% top.50) %>%
+        mutate(TF=factor(TF, levels = order.regs)) %>%
+                ggplot(aes(x=TF, y=Freq, fill=category)) +
+                        geom_bar(position = 'fill', stat = 'identity') +
+                        coord_flip() +
+                        theme_bw() +
+                        theme(panel.grid = element_blank()) +
+                        labs(x='Regulon', y='Ratio of interactions',
+                             fill='')  
+dev.off()
+
+pdf('/media/ag-cherrmann/cramirez/tcd8ExscSeq/figures/freq_interactions_by_category.pdf',
+    width = 5, height = 7)
+freq.df %>%
+        as.data.frame() %>%
+        filter(TF %in% top.50) %>%
+        mutate(TF=factor(TF, levels = rev(top.50))) %>%
+                ggplot(aes(x=TF, y=Freq, fill=category)) +
+                        geom_bar(position = 'stack', stat = 'identity') +
+                        coord_flip() +
+                        theme_bw() +
+                        theme(panel.grid = element_blank()) +
+                        labs(x='Regulon', y='Number of interactions',
+                             fill='')  
+dev.off()
+```
+
+
+# Number of conserved interactions
+
+```{r}
+interactions.df <- interactions.df %>%
+        mutate(interaction=paste0(gene, '--',TF))
+int.list <- split(interactions.df$interaction, interactions.df$category) 
+ggVennDiagram(int.list)
+```
