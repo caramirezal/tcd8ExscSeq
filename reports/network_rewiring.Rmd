@@ -19,6 +19,8 @@ library(tidyverse)
 library(ggplot2)
 library(ggrepel)
 library(ggVennDiagram)
+library(Seurat)
+library(viridis)
 ```
 
 
@@ -98,7 +100,9 @@ edges.df <- data.frame(from=stat1.reg$TF, to=stat1.reg$gene, category=stat1.reg$
 g <- graph_from_data_frame(edges.df, directed = TRUE, vertices = nodes.df)
 ```
 
+
 # STAT1 example
+
 
 ```{r, fig.height=10, fig.width=10}
 selected.genes <- c('FOXP1', 'IRS2', 'PRDM1',
@@ -196,4 +200,214 @@ interactions.df <- interactions.df %>%
         mutate(interaction=paste0(gene, '--',TF))
 int.list <- split(interactions.df$interaction, interactions.df$category) 
 ggVennDiagram(int.list)
+```
+
+
+
+# Visualisation of genes in selected regulons
+
+## REL regulon
+
+
+```{r, fig.width=8, fig.height=12}
+path2seurat <- '/media/ag-cherrmann/cramirez/tcd8ExscSeq/data/maike2020/hofmann_hcv_seu.rds'
+seurat <- read_rds(path2seurat)
+seurat$nina_annotations %>% table()
+
+DefaultAssay(seurat) <- 'RNA'
+
+rel.reg <- filter(interactions.df, TF == 'REL' )  
+rel.reg.list <- split(rel.reg$gene, rel.reg$category)
+seurat$'condition' <- ifelse(is.na(seurat$nina_annotations), 'chronic', 'cured')
+dotplot.hub0709 <- DotPlot(subset(seurat, orig.ident %in% c('HUBF0709BL', 'HUBF0709FUDay2')), 
+        features = rel.reg.list$reversed, 
+        group.by = 'orig.ident',
+        cols = 'RdYlGn', 
+        dot.scale = 10) +
+        coord_flip() +
+        ggtitle('HUBF0709') +
+        labs(x='', y='') +
+        theme_bw() +
+        theme(axis.text.x = element_text(angle = 45,
+                                         hjust = 1),
+              panel.grid = element_blank())
+
+dotplot.hubf004 <- DotPlot(subset(seurat, 
+                                  orig.ident %in% c('HUBF0044BL', 'HUBF0044SORT3BFU')), 
+        features = rel.reg.list$gained, 
+        group.by = 'orig.ident',
+        cols = 'RdYlGn', 
+        dot.scale = 10) +
+        coord_flip() +
+        ggtitle('HUBF0044') +
+        labs(x='', y='') + 
+        theme_bw() +
+        theme(axis.text.x = element_text(angle = 45,
+                                         hjust = 1),
+              panel.grid = element_blank())
+
+
+pdf('/media/ag-cherrmann/cramirez/tcd8ExscSeq//figures/gene_expression_REL_regulon.pdf',
+    width = 8, height = 12)
+dotplot.hub0709 + dotplot.hubf004
+dev.off()
+
+
+
+#####
+rel.reg <- filter(interactions.df, TF == 'STAT1' )  
+rel.reg.list <- split(rel.reg$gene, rel.reg$category)
+seurat$'condition' <- ifelse(is.na(seurat$nina_annotations), 'chronic', 'cured')
+dotplot.hub0709 <- DotPlot(subset(seurat, orig.ident %in% c('HUBF0709BL', 
+                                                            'HUBF0709FUDay2')), 
+        features = rel.reg.list$gained, 
+        group.by = 'orig.ident',
+        cols = 'RdYlGn', 
+        dot.scale = 10) +
+        coord_flip() +
+        ggtitle('HUBF0709') +
+        labs(x='', y='') +
+        theme_bw() +
+        theme(axis.text.x = element_text(angle = 45,
+                                         hjust = 1),
+              panel.grid = element_blank())
+
+dotplot.hubf004 <- DotPlot(subset(seurat, 
+                                  orig.ident %in% c('HUBF0044BL', 'HUBF0044SORT3BFU')), 
+        features = rel.reg.list$gained, 
+        group.by = 'orig.ident',
+        cols = 'RdYlGn', 
+        dot.scale = 10) +
+        coord_flip() +
+        ggtitle('HUBF0044') +
+        labs(x='', y='') + 
+        theme_bw() +
+        theme(axis.text.x = element_text(angle = 45,
+                                         hjust = 1),
+              panel.grid = element_blank())
+
+
+pdf('/media/ag-cherrmann/cramirez/tcd8ExscSeq//figures/gene_expression_STAT1_regulon.pdf',
+    width = 8, height = 15)
+dotplot.hub0709 + dotplot.hubf004
+dev.off()
+
+
+```
+
+
+```{r, hubf0709, fig.width=4.5, fig.height=15}
+library(ComplexHeatmap)
+seurat$orig.ident %>% table()
+
+rel.reg.df <- filter(interactions.df, TF == 'REL')
+rel.reg.df
+targets <- split(rel.reg.df$gene, rel.reg.df$category) %>% unlist()
+names(targets) <- gsub('[[:digit:]]*$', '', names(targets))
+mtx.hubf004 <- FetchData(subset(seurat, orig.ident %in% c('HUBF0709BL', 
+                                                       'HUBF0709FUDay2')), 
+                         vars = rel.reg.df$gene)
+mtx.hubf004 <- t(mtx.hubf004) %>% as.matrix()
+
+gene.anns <- rel.reg.df
+
+patient.anns <- FetchData(subset(seurat, orig.ident %in% c('HUBF0709BL', 
+                                                       'HUBF0709FUDay2')), 
+                         vars = 'orig.ident')
+
+## calculating top HVG 
+top40hvgGenes <- mtx.hubf004 %>%
+        apply(1, sd) %>%
+        sort(decreasing = TRUE) %>%
+        head(50) %>%
+        names()
+
+#gene.anns <- filter(gene.anns, gene %in% unique(top40hvgGenes))
+
+## only non-duplicated genes
+rel.reg.df <- filter(interactions.df, TF == 'REL') %>%
+                filter(!duplicated(gene))
+
+mtx.hubf004 <- FetchData(subset(seurat, orig.ident %in% c('HUBF0709BL', 
+                                                       'HUBF0709FUDay2')), 
+                         vars = c(rel.reg.df$gene, 'orig.ident')
+                         )
+mtx.hubf004 <- mtx.hubf004 %>%
+        group_by(orig.ident) %>%
+        summarise_all(mean) %>%
+        column_to_rownames('orig.ident') %>%
+        t() %>%
+        as.matrix()
+
+
+mtx.hubf004 <- mtx.hubf004[rel.reg.df$gene, ]
+
+pdf('/media/ag-cherrmann/cramirez/tcd8ExscSeq/figures/rel_regulon_by_category_hubf0709.pdf',
+    height = 18, width = 5)
+Heatmap(
+        mtx.hubf004, 
+        show_column_names = TRUE, 
+        row_split = rel.reg.df$category, 
+        col = viridis(20)
+)
+dev.off()
+```
+
+
+```{r, hubf0709, fig.width=4, fig.height=15}
+library(ComplexHeatmap)
+seurat$orig.ident %>% table()
+
+rel.reg.df <- filter(interactions.df, TF == 'BACH2')
+rel.reg.df
+targets <- split(rel.reg.df$gene, rel.reg.df$category) %>% unlist()
+names(targets) <- gsub('[[:digit:]]*$', '', names(targets))
+mtx.hubf004 <- FetchData(subset(seurat, orig.ident %in% c('HUBF0044BL', 
+                                                       'HUBF0044SORT3BFU')), 
+                         vars = rel.reg.df$gene)
+mtx.hubf004 <- t(mtx.hubf004) %>% as.matrix()
+
+gene.anns <- rel.reg.df
+
+patient.anns <- FetchData(subset(seurat, orig.ident %in% c('HUBF0044BL', 
+                                                       'HUBF0044SORT3BFU')), 
+                         vars = 'orig.ident')
+
+## calculating top HVG 
+top40hvgGenes <- mtx.hubf004 %>%
+        apply(1, sd) %>%
+        sort(decreasing = TRUE) %>%
+        head(50) %>%
+        names()
+
+#gene.anns <- filter(gene.anns, gene %in% unique(top40hvgGenes))
+
+## only non-duplicated genes
+rel.reg.df <- filter(interactions.df, TF == 'BACH2') %>%
+                filter(!duplicated(gene))
+rel.reg.df <- rel.reg.df[!duplicated(rel.reg.df$gene), ]
+
+mtx.hubf004 <- FetchData(subset(seurat, orig.ident %in% c('HUBF0044BL', 
+                                                       'HUBF0044SORT3BFU')), 
+                         vars = c(rel.reg.df$gene, 'orig.ident')
+                         )
+mtx.hubf004 <- mtx.hubf004 %>%
+        group_by(orig.ident) %>%
+        summarise_all(mean) %>%
+        column_to_rownames('orig.ident') %>%
+        t() %>%
+        as.matrix()
+
+
+rel.reg.df <- column_to_rownames(rel.reg.df, var = 'gene')
+intersect.genes <- intersect(rownames(rel.reg.df), rownames(mtx.hubf004))
+mtx.hubf004 <- mtx.hubf004[intersect.genes, ]
+
+Heatmap(
+        mtx.hubf004, 
+        show_column_names = TRUE, 
+        row_split = rel.reg.df[intersect.genes,]$category, 
+        col = viridis(20),
+        column_dend_reorder = NA
+)
 ```
