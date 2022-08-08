@@ -37,7 +37,8 @@ library(ggpubr)
 library(igraph)
 library(ComplexHeatmap)
 library(viridis)
-#library(AUCell)
+library(AUCell)
+library(ggrepel)
 
 ## Rmarkdown Settings
 knitr::opts_chunk$set(
@@ -942,6 +943,13 @@ regulons <- lapply(granet.interactions.df.list,
 
 lapply(regulons, length)
 
+## Saving regulons 
+saveRDS(regulons, 
+        '/media/ag-cherrmann/cramirez/tcd8ExscSeq/analysis/granet_regulons_categories_list.rds', 
+        compress = TRUE
+
+)
+
 ## Filtering regulons
 
 #regulons <- regulons[sapply(regulons, function(reg) length(reg) > 5)]
@@ -960,8 +968,8 @@ genes <- unique(rownames(mtx.cell_types))
 cells_rankings <- AUCell_buildRankings(mtx.cell_types)
 
 #geneSets <- unlist(regulons, recursive = FALSE)
-cells_AUC <- AUCell_calcAUC(geneSets, cells_rankings, 
-                            aucMaxRank=nrow(cells_rankings)*0.005)
+cells_AUC <- AUCell_calcAUC(regulons, cells_rankings, 
+                            aucMaxRank=nrow(cells_rankings)*0.05)
 auc.mtx <- getAUC(cells_AUC)
 
 #col_anns <- HeatmapAnnotation(cell_type = seurat.cell_types$nina_annotations)
@@ -1035,7 +1043,7 @@ auc.mtx <- getAUC(cells_AUC)
 #       geom_point() +
 #       geom_abline(slope = 1)
 
-
+auc.mtx <- readRDS('/media/ag-cherrmann/cramirez/tcd8ExscSeq/analysis/dta/auc_mtx.rds')
 tfa <- CreateAssayObject(data = auc.mtx, min.cells = 0, min.features = 0)
 seurat.cell_types[["regulon_"]] <- tfa
 Idents(seurat.cell_types) <- seurat.cell_types$nina_annotations
@@ -1046,16 +1054,27 @@ diff.tfa <- FindMarkers(seurat.cell_types,
                min.pct = 0, 
                ident.1 = 'mem', ident.2 = 'exh')
 
+#dir.create('/media/ag-cherrmann/cramirez/tcd8ExscSeq/analysis/dta')
+#writexl::write_xlsx(
+#        rownames_to_column(diff.tfa, var = 'regulon'),
+#        '/media/ag-cherrmann/cramirez/tcd8ExscSeq/analysis/dta/differential_activity.xlsx'
+#)
 
-library(ggrepel)
 
+```
+
+
+
+```{r, dta_vis, eval=FALSE}
 print('')
+pdf('/media/ag-cherrmann/cramirez/tcd8ExscSeq/figures/dta_vulcano_plot.pdf',
+    height = 4, width = 6.5)
 diff.tfa %>%
   mutate(category=gsub('\\..*', '', rownames(diff.tfa))) %>%
   mutate(tf=gsub('.*\\.', '', rownames(diff.tfa))) %>%
   arrange(desc(abs(avg_log2FC))) %>%
   mutate(rank=1:n()) %>%
-  mutate(tf_label=ifelse(rank<20, tf, '')) %>%
+  mutate(tf_label=ifelse(rank<20|tf=='BACH2', tf, '')) %>%
   ggplot(aes(x=avg_log2FC, 
              y=-log10(p_val),
              colour=category,
@@ -1071,7 +1090,7 @@ diff.tfa %>%
            color='',
            x='Mean Log2(FC)',
            y='-Log10(p-Value)')
-
+dev.off()
 
 
 #FeaturePlot(subset(seurat.cell_types, nina_annotations %in% c('exh', 'mem')), 
@@ -1081,8 +1100,101 @@ diff.tfa %>%
 #        group.by = 'nina_annotations')
 ```
 
+## DTA comparing cured Vs chronic
+
+```{r, fig.width=11, fig.height=6}
+seu <- readRDS(
+        '/media/ag-cherrmann/cramirez/tcd8ExscSeq/data/maike2020/hofmann_hcv_seu.rds'
+)
+seu[[]]$orig.ident %>% unique()
+seu[[]]$nina_annotations %>% unique()
+
+auc.mtx <- readRDS('/media/ag-cherrmann/cramirez/tcd8ExscSeq/analysis/dta/auc_mtx.rds')
+auc.mtx %>% dim; seu
+seu$'condition' <- ifelse(is.na(seu$nina_annotations), 'cured', 'chronic') 
+tfa <- CreateAssayObject(data = auc.mtx, min.cells = 0, min.features = 0)
+tfa
+seu[["regulon_"]] <- tfa
+Idents(seu) <- seu$condition
+diff.tfa.HUB0044 <- FindMarkers(subset(seu, orig.ident %in% c('HUBF0044BL', 
+                                                      'UBF0044SORT3BFU')), 
+               assay = 'regulon_', 
+               group.by = 'condition', 
+               logfc.threshold = 0, 
+               min.pct = 0, 
+               ident.1 = 'cured', ident.2 = 'chronic')
+
+
+
+diff.tfa.HUB0044.plot <- diff.tfa.HUB0044 %>%
+  mutate(category=gsub('\\..*', '', rownames(diff.tfa.HUB0044))) %>%
+  mutate(tf=gsub('.*\\.', '', rownames(diff.tfa.HUB0044))) %>%
+  arrange(desc(abs(avg_log2FC))) %>%
+  mutate(rank=1:n()) %>%
+  mutate(tf_label=ifelse(rank<20|tf=='BACH2', tf, '')) %>%
+  ggplot(aes(x=avg_log2FC, 
+             y=-log10(p_val),
+             colour=category,
+             label=tf_label)) +
+      geom_point(size=3) +
+      geom_point(shape=1, size=3, color='black') +
+      geom_text_repel() +
+      geom_hline(yintercept = -log10(0.05), 
+                 linetype = 'dashed') +
+      theme_bw() +
+      labs(title = 'Differential Regulon Activity',
+           subtitle = 'Cured Vs Chronic - HUBF0044',
+           color='',
+           x='Mean Log2(FC)',
+           y='-Log10(p-Value)')
+
+
+
+
+diff.tfa.HUBF0709 <- FindMarkers(subset(seu, orig.ident %in% c('HUBF0709BL', 
+                                                      'HUBF0709FUDay2')), 
+               assay = 'regulon_', 
+               group.by = 'condition', 
+               logfc.threshold = 0, 
+               min.pct = 0, 
+               ident.1 = 'cured', ident.2 = 'chronic')
+
+
+
+diff.tfa.HUBF0709.plot <- diff.tfa.HUBF0709 %>%
+  mutate(category=gsub('\\..*', '', rownames(diff.tfa.HUBF0709))) %>%
+  mutate(tf=gsub('.*\\.', '', rownames(diff.tfa.HUBF0709))) %>%
+  arrange(desc(abs(avg_log2FC))) %>%
+  mutate(rank=1:n()) %>%
+  mutate(tf_label=ifelse(rank<20|tf=='BACH2', tf, '')) %>%
+  ggplot(aes(x=avg_log2FC, 
+             y=-log10(p_val),
+             colour=category,
+             label=tf_label)) +
+      geom_point(size=3) +
+      geom_point(shape=1, size=3, color='black') +
+      geom_text_repel() +
+      geom_hline(yintercept = -log10(0.05), 
+                 linetype = 'dashed') +
+      theme_bw() +
+      labs(title = 'Differential Regulon Activity',
+           subtitle = 'Cured Vs Chronic - HUBF0709',
+           color='',
+           x='Mean Log2(FC)',
+           y='-Log10(p-Value)')
+
+
+pdf('/media/ag-cherrmann/cramirez/tcd8ExscSeq/figures/dta_vulcano_plot_conditions.pdf',
+    width = 12, height = 5)
+diff.tfa.HUB0044.plot + diff.tfa.HUBF0709.plot
+dev.off()
+
+table(seu$orig.ident)
+```
+
 
 ## Variability in cured vs chronic samples
+
 
 ```{r, fig.width=8}
 path2seurat <- '/media/ag-cherrmann/cramirez/tcd8ExscSeq/data/Thimme_reprocessed/seurat.thimme.rds'
