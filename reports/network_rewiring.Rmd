@@ -483,4 +483,20 @@ gridExtra::grid.arrange(
 dev.off()
 ```
 
+# Calculcation of the fraction of positive or negative interactions
+
+```{r}
+lapply(peak_categories,
+       function(cat){
+        freqs.df <- labelled_targets.df %>%
+                filter(category==cat) %>%
+                select(TF, regulation_type) %>%
+                       table() %>%
+                        as.matrix() %>%
+                        apply(2, sum)
+        prop <- freqs.df / sum(freqs.df)
+        prop
+})
+```
+
 
