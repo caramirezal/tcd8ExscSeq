@@ -1108,6 +1108,7 @@ seu <- readRDS(
 )
 seu[[]]$orig.ident %>% unique()
 seu[[]]$nina_annotations %>% unique()
+table(seu[[]]$orig.ident, seu[[]]$nina_annotations)
 
 auc.mtx <- readRDS('/media/ag-cherrmann/cramirez/tcd8ExscSeq/analysis/dta/auc_mtx.rds')
 auc.mtx %>% dim; seu
@@ -1190,6 +1191,135 @@ diff.tfa.HUB0044.plot + diff.tfa.HUBF0709.plot
 dev.off()
 
 table(seu$orig.ident)
+```
+
+
+```{r, dta_pooling_patients}
+diff.tfa.condition <- FindMarkers(
+        subset(seu, condition %in% c('chronic', 'cured')), 
+               assay = 'regulon_', 
+               group.by = 'condition', 
+               logfc.threshold = 0, 
+               min.pct = 0, 
+               ident.1 = 'cured', ident.2 = 'chronic')
+
+
+
+diff.tfa.condition.plot <- diff.tfa.condition %>%
+  mutate(category=gsub('\\..*', '', rownames(diff.tfa.condition))) %>%
+  mutate(tf=gsub('.*\\.', '', rownames(diff.tfa.condition))) %>%
+  arrange(desc(abs(avg_log2FC))) %>%
+  mutate(rank=1:n()) %>%
+  mutate(tf_label=ifelse(rank<20|tf=='BACH2', tf, '')) %>%
+  ggplot(aes(x=avg_log2FC, 
+             y=-log10(p_val),
+             colour=category,
+             label=tf_label)) +
+      geom_point(size=3) +
+      geom_point(shape=1, size=3, color='black') +
+      geom_text_repel() +
+      geom_hline(yintercept = -log10(0.05), 
+                 linetype = 'dashed') +
+      theme_bw() +
+      labs(title = 'Differential Regulon Activity',
+           subtitle = 'Cured Vs Chronic',
+           color='',
+           x='Mean Log2(FC)',
+           y='-Log10(p-Value)')
+
+
+pdf('/media/ag-cherrmann/cramirez/tcd8ExscSeq/figures/dta_vulcano_plot_conditions_pooled_patients.pdf',
+    width = 8, height = 5)
+diff.tfa.condition.plot
+dev.off()
+
+
+```
+
+# Comparing cured Vs memory
+
+```{r, cured_Vs_memory}
+seu$cell_type <- as.character(seu$nina_annotations)
+seu$cell_type[is.na(seu$cell_type)] <- 'Cells from cured'
+diff.tfa.curedVsMem <- FindMarkers(
+        subset(seu, cell_type %in% c('Cells from cured', 'mem')), 
+               assay = 'regulon_', 
+               group.by = 'cell_type', 
+               logfc.threshold = 0, 
+               min.pct = 0, 
+               ident.1 = 'Cells from cured', 
+               ident.2 = 'mem')
+
+diff.tfa.curedVsMem.plot <- diff.tfa.curedVsMem %>%
+  mutate(category=gsub('\\..*', '', rownames(diff.tfa.condition))) %>%
+  mutate(tf=gsub('.*\\.', '', rownames(diff.tfa.condition))) %>%
+  arrange(desc(abs(avg_log2FC))) %>%
+  mutate(rank=1:n()) %>%
+  mutate(tf_label=ifelse(rank<20|tf=='BACH2', tf, '')) %>%
+  ggplot(aes(x=avg_log2FC, 
+             y=-log10(p_val),
+             colour=category,
+             label=tf_label)) +
+      geom_point(size=3) +
+      geom_point(shape=1, size=3, color='black') +
+      geom_text_repel() +
+      geom_hline(yintercept = -log10(0.05), 
+                 linetype = 'dashed') +
+      theme_bw() +
+      labs(title = 'Differential Regulon Activity',
+           subtitle = 'Cured Vs Memory',
+           color='',
+           x='Mean Log2(FC)',
+           y='-Log10(p-Value)')
+
+
+diff.tfa.curedVsMem.plot
+```
+
+
+```{r, cured_Vs_exh}
+seu$cell_type <- as.character(seu$nina_annotations)
+seu$cell_type[is.na(seu$cell_type)] <- 'Cells from cured'
+diff.tfa.curedVsMem <- FindMarkers(
+        subset(seu, cell_type %in% c('Cells from cured', 'exh')), 
+               assay = 'regulon_', 
+               group.by = 'cell_type', 
+               logfc.threshold = 0, 
+               min.pct = 0, 
+               ident.1 = 'Cells from cured', 
+               ident.2 = 'exh')
+
+diff.tfa.curedVsExh.plot <- diff.tfa.curedVsMem %>%
+  mutate(category=gsub('\\..*', '', rownames(diff.tfa.condition))) %>%
+  mutate(tf=gsub('.*\\.', '', rownames(diff.tfa.condition))) %>%
+  arrange(desc(abs(avg_log2FC))) %>%
+  mutate(rank=1:n()) %>%
+  mutate(tf_label=ifelse(rank<20|tf=='BACH2', tf, '')) %>%
+  ggplot(aes(x=avg_log2FC, 
+             y=-log10(p_val),
+             colour=category,
+             label=tf_label)) +
+      geom_point(size=3) +
+      geom_point(shape=1, size=3, color='black') +
+      geom_text_repel() +
+      geom_hline(yintercept = -log10(0.05), 
+                 linetype = 'dashed') +
+      theme_bw() +
+      labs(title = 'Differential Regulon Activity',
+           subtitle = 'Cured Vs Exhausted',
+           color='',
+           x='Mean Log2(FC)',
+           y='-Log10(p-Value)')
+
+diff.tfa.curedVsExh.plot
+```
+
+
+```{r, plotting_dta_plots}
+pdf('/media/ag-cherrmann/cramirez/tcd8ExscSeq/figures/dta_vulcano_CuredVsMemOrExh.pdf',
+    width = 15, height = 5)
+diff.tfa.curedVsMem.plot + diff.tfa.curedVsExh.plot
+dev.off()
 ```
 
 
