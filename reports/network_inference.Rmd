@@ -932,7 +932,7 @@ Heatmap(scores.mtx,
 
 
 
-```{r}
+```{r, eval=FALSE}
 library(AUCell)
 lapply(granet.interactions.df.list, head)
 
@@ -965,12 +965,12 @@ mtx.cell_types <- seurat.cell_types@assays$integrated@scale.data
 
 genes <- unique(rownames(mtx.cell_types))
 
-cells_rankings <- AUCell_buildRankings(mtx.cell_types)
+#cells_rankings <- AUCell_buildRankings(mtx.cell_types)
 
 #geneSets <- unlist(regulons, recursive = FALSE)
-cells_AUC <- AUCell_calcAUC(regulons, cells_rankings, 
-                            aucMaxRank=nrow(cells_rankings)*0.05)
-auc.mtx <- getAUC(cells_AUC)
+#cells_AUC <- AUCell_calcAUC(regulons, cells_rankings, 
+#                            aucMaxRank=nrow(cells_rankings)*0.05)
+#auc.mtx <- getAUC(cells_AUC)
 
 #col_anns <- HeatmapAnnotation(cell_type = seurat.cell_types$nina_annotations)
 #row_anns <- rowAnnotation(category = gsub('\\..*', '', rownames(auc.mtx)))
@@ -1190,7 +1190,36 @@ pdf('/media/ag-cherrmann/cramirez/tcd8ExscSeq/figures/dta_vulcano_plot_condition
 diff.tfa.HUB0044.plot + diff.tfa.HUBF0709.plot
 dev.off()
 
-table(seu$orig.ident)
+DefaultAssay(seu) <- 'regulon_'
+##seu <- NormalizeData(seu)
+
+
+dplot.hub0044 <- DotPlot(subset(seu, orig.ident %in% c('HUBF0044BL', 
+                                                      'UBF0044SORT3BFU')), 
+        features = c('reversed.BATF3',
+                     'reversed.BACH2',
+                     'gained.ZSCAN29',
+                     'gained.ATF3',
+                     'gained.MECOM',
+                     'scarred.BACH2'), 
+        cols = 'RdYlGn', dot.scale = 10) +
+        coord_flip() +
+        labs(x='', y='', title = 'HUBF0044')
+
+
+## HUBF0709 check
+dplot.hub0709 <- DotPlot(subset(seu, orig.ident %in% c('HUBF0709BL', 'HUBF0709FUDay2')), 
+        features = c('reversed.BATF3',
+                     'reversed.TGIF1',
+                     'reversed.BHLHE40',
+                     'scarred.NR3C2',
+                     'reversed.EOMES',
+                     'reversed.BACH2'), 
+        cols = 'RdYlGn', dot.scale = 10) +
+        coord_flip() +
+        labs(x='', y='', title = 'HUBF0709')
+
+dplot.hub0044 + dplot.hub0709
 ```
 
 
@@ -1233,7 +1262,19 @@ pdf('/media/ag-cherrmann/cramirez/tcd8ExscSeq/figures/dta_vulcano_plot_condition
 diff.tfa.condition.plot
 dev.off()
 
+dplot.conditions <- DotPlot(seu, 
+        features = c('reversed.BATF3',
+                     'reversed.TGIF1',
+                     'scarred.MSX1',
+                     'scarred.KLF6',
+                     'gained.NR1D2',
+                     'reversed.BACH2'), 
+        cols = 'RdYlGn', dot.scale = 12) +
+        coord_flip() +
+        labs(x='', y='', title = 'HUBF0709')
 
+print('')
+dplot.conditions
 ```
 
 # Comparing cured Vs memory
@@ -1251,8 +1292,8 @@ diff.tfa.curedVsMem <- FindMarkers(
                ident.2 = 'mem')
 
 diff.tfa.curedVsMem.plot <- diff.tfa.curedVsMem %>%
-  mutate(category=gsub('\\..*', '', rownames(diff.tfa.condition))) %>%
-  mutate(tf=gsub('.*\\.', '', rownames(diff.tfa.condition))) %>%
+  mutate(category=gsub('\\..*', '', rownames(diff.tfa.curedVsMem))) %>%
+  mutate(tf=gsub('.*\\.', '', rownames(diff.tfa.curedVsMem))) %>%
   arrange(desc(abs(avg_log2FC))) %>%
   mutate(rank=1:n()) %>%
   mutate(tf_label=ifelse(rank<20|tf=='BACH2', tf, '')) %>%
@@ -1274,13 +1315,30 @@ diff.tfa.curedVsMem.plot <- diff.tfa.curedVsMem %>%
 
 
 diff.tfa.curedVsMem.plot
+
+dplot.curedVsMem <- DotPlot(
+        subset(seu, cell_type %in% c('Cells from cured', 'mem')), 
+        features = c('reversed.EBF1',
+                     'reversed.AR',
+                     'reversed.FOXJ2',
+                     'gained.BACH2',
+                     'reversed.NR2E3',
+                     'scarred.NR3C2',
+                     'reversed.TGIF1',
+                     'reversed.BATF3'), 
+        cols = 'RdYlGn', dot.scale = 12,
+        group.by = 'cell_type') +
+        coord_flip() +
+        labs(x='', y='')
+
+dplot.curedVsMem
 ```
 
 
 ```{r, cured_Vs_exh}
 seu$cell_type <- as.character(seu$nina_annotations)
 seu$cell_type[is.na(seu$cell_type)] <- 'Cells from cured'
-diff.tfa.curedVsMem <- FindMarkers(
+diff.tfa.curedVsExh <- FindMarkers(
         subset(seu, cell_type %in% c('Cells from cured', 'exh')), 
                assay = 'regulon_', 
                group.by = 'cell_type', 
@@ -1289,9 +1347,9 @@ diff.tfa.curedVsMem <- FindMarkers(
                ident.1 = 'Cells from cured', 
                ident.2 = 'exh')
 
-diff.tfa.curedVsExh.plot <- diff.tfa.curedVsMem %>%
-  mutate(category=gsub('\\..*', '', rownames(diff.tfa.condition))) %>%
-  mutate(tf=gsub('.*\\.', '', rownames(diff.tfa.condition))) %>%
+diff.tfa.curedVsExh.plot <- diff.tfa.curedVsExh %>%
+  mutate(category=gsub('\\..*', '', rownames(diff.tfa.curedVsExh))) %>%
+  mutate(tf=gsub('.*\\.', '', rownames(diff.tfa.curedVsExh))) %>%
   arrange(desc(abs(avg_log2FC))) %>%
   mutate(rank=1:n()) %>%
   mutate(tf_label=ifelse(rank<20|tf=='BACH2', tf, '')) %>%
@@ -1311,15 +1369,40 @@ diff.tfa.curedVsExh.plot <- diff.tfa.curedVsMem %>%
            x='Mean Log2(FC)',
            y='-Log10(p-Value)')
 
+seu$cell_type %>% table()
 diff.tfa.curedVsExh.plot
+
+dplot.curedVsExh <- DotPlot(
+        subset(seu, cell_type %in% c('Cells from cured', 'exh')), 
+        features = c('scarred.EOMES',
+                     'scarred.NFIC',
+                     'gained.CREM',
+                     'scarred.BACH2',
+                     'gained.BACH2',
+                     'reversed.FOXJ2',
+                     'reversed.AR',
+                     'reversed.EBF1'), 
+        cols = 'RdYlGn', dot.scale = 12,
+        group.by = 'cell_type') +
+        coord_flip() +
+        labs(x='', y='')
+
+dplot.curedVsExh
+
+pdf('/media/ag-cherrmann/cramirez/tcd8ExscSeq/figures/dotplot_check_dta_curedVsMemOrExh.pdf',
+    width = 12, height = 4)
+dplot.curedVsMem + dplot.curedVsExh
+dev.off()
 ```
 
 
-```{r, plotting_dta_plots}
+```{r, plotting_dta_plots, fig.width=15, fig.height=5}
 pdf('/media/ag-cherrmann/cramirez/tcd8ExscSeq/figures/dta_vulcano_CuredVsMemOrExh.pdf',
     width = 15, height = 5)
 diff.tfa.curedVsMem.plot + diff.tfa.curedVsExh.plot
 dev.off()
+
+diff.tfa.curedVsMem.plot + diff.tfa.curedVsExh.plot
 ```
 
 
